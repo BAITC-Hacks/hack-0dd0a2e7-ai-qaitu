@@ -47,6 +47,7 @@ def review_with_llm(
 
     response = OpenAI(api_key=api_key).responses.create(
         model=model,
+        store=False,
         input=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": encoded},

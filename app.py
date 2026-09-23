@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pandas as pd
 import streamlit as st
@@ -21,6 +22,27 @@ def source_label(source) -> str:
     return f"{source.document}, {source.locator} — «{source.text}»"
 
 
+def add_llm_findings(result, before_docs, after_docs, key: str, model: str) -> None:
+    if not key:
+        st.warning("LLM-проверка не запущена: укажите API key или настройте OPENAI_API_KEY на сервере.")
+        return
+    try:
+        with st.spinner("Агент выполняет смысловую перепроверку выводов…"):
+            reviewed = review_with_llm(before_docs, after_docs, result, key, model)
+    except Exception as exc:
+        st.warning(f"LLM-проверка не завершилась ({type(exc).__name__}). Локальный анализ сохранён.")
+        return
+    existing = {
+        (finding.kind, frozenset(source.id for source in finding.sources))
+        for finding in result.findings
+    }
+    for finding in reviewed:
+        identity = finding.kind, frozenset(source.id for source in finding.sources)
+        if identity not in existing:
+            result.findings.append(finding)
+            existing.add(identity)
+
+
 with st.sidebar:
     st.header("Документы")
     before_files = st.file_uploader(
@@ -33,9 +55,10 @@ with st.sidebar:
     demo = st.button("Запустить контрольный пример", width="stretch")
     with st.expander("Смысловая LLM-проверка (опционально)"):
         use_llm = st.checkbox("Включить второй этап")
-        api_key = st.text_input("OpenAI API key", type="password", disabled=not use_llm)
+        api_key_input = st.text_input("OpenAI API key", type="password", disabled=not use_llm)
+        api_key = api_key_input or os.getenv("OPENAI_API_KEY", "")
         model = st.text_input("Модель", value="gpt-4.1-mini", disabled=not use_llm)
-        st.caption("Фрагменты документов будут отправлены во внешний API. Ключ нигде не сохраняется.")
+        st.caption("При включении фрагменты документов будут отправлены во внешний API. Серверный ключ не показывается в браузере.")
     st.divider()
     st.info("Выводы носят рекомендательный характер. Сканированные PDF необходимо предварительно распознать (OCR).")
 
@@ -48,10 +71,7 @@ if run:
         after_docs = [extract_document(file, file.name, "after") for file in after_files]
         result = analyze_documents(before_docs, after_docs)
         if use_llm:
-            if not api_key:
-                raise ValueError("Для LLM-проверки укажите API key или отключите второй этап.")
-            with st.spinner("Агент выполняет смысловую перепроверку выводов…"):
-                result.findings.extend(review_with_llm(before_docs, after_docs, result, api_key, model))
+            add_llm_findings(result, before_docs, after_docs, api_key, model)
         st.session_state["result"] = result
         st.session_state["document_counts"] = (len(before_docs), len(after_docs))
         st.session_state["mode"] = "uploaded"
@@ -62,11 +82,7 @@ elif demo:
     before_docs, after_docs = demo_documents()
     result = analyze_documents(before_docs, after_docs)
     if use_llm:
-        if not api_key:
-            st.error("Для LLM-проверки укажите API key или отключите второй этап.")
-            st.stop()
-        with st.spinner("Агент выполняет смысловую перепроверку выводов…"):
-            result.findings.extend(review_with_llm(before_docs, after_docs, result, api_key, model))
+        add_llm_findings(result, before_docs, after_docs, api_key, model)
     st.session_state["result"] = result
     st.session_state["document_counts"] = (len(before_docs), len(after_docs))
     st.session_state["mode"] = "demo"
