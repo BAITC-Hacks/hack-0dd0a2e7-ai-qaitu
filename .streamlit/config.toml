@@ -5,4 +5,20 @@ gatherUsageStats = false
 maxUploadSize = 25
 
 [theme]
-primaryColor = "#128976"
+font = "sans-serif"
+baseRadius = "0.75rem"
+buttonRadius = "0.875rem"
+
+[theme.light]
+primaryColor = "#087c68"
+backgroundColor = "#f3f7f5"
+secondaryBackgroundColor = "#e7efeb"
+textColor = "#203a33"
+borderColor = "#d2ded8"
+
+[theme.dark]
+primaryColor = "#75d2b7"
+backgroundColor = "#14221e"
+secondaryBackgroundColor = "#20352c"
+textColor = "#e0ece7"
+borderColor = "#3c5549"
