@@ -59,7 +59,7 @@ def welcome():
 </section>''', unsafe_allow_html=True)
         action, detail = st.columns([1, 1.25], gap="medium")
         with action:
-            requested = st.button("тест", key="welcome_demo", type="primary", width="stretch", icon=":material/play_arrow:")
+            requested = st.button("Запустить контрольный пример", key="welcome_demo", type="primary", width="stretch", icon=":material/play_arrow:")
         with detail:
             st.caption("Синтетические документы. Без файлов и API-ключа.")
     st.markdown('''<section class="qa-workflow" aria-label="Как работает сравнение">
