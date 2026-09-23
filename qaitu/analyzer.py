@@ -247,6 +247,10 @@ def extract_units_and_functions(documents: list[Document]) -> tuple[dict[str, li
             is_letter = bool(LETTER.match(text))
             if not body or body.strip(".;:") == "":
                 continue
+            if (is_letter or body.endswith(".")) and re.match(r"^(?:директор|руководитель|менеджер|аудитор)\s+", body, re.I) and not FINITE.search(body) and not MODAL.search(body):
+                # A position in a staffing list is an entity, not an action
+                # named "руководитель" merely sharing a verb stem.
+                continue
             if clause:
                 intro, intro_text = None, ""
                 if owner_prefix and not (clause == owner_prefix or clause.startswith(owner_prefix + ".")):

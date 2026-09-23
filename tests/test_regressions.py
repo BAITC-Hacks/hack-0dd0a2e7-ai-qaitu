@@ -27,6 +27,19 @@ CATALOG = [
 
 
 class ContextExtractionRegressionTest(unittest.TestCase):
+    def test_staffing_list_job_titles_are_not_functions(self):
+        source = document(CATALOG + [
+            "3.7. Директору ДМ подчиняются работники в составе следующих должностей:",
+            "а. Руководитель направления непрерывного мониторинга.",
+            "б. Директор проектов ДМ.",
+            "5.4. Директор ДМ:",
+            "5.4.1. руководит подготовкой методики внутреннего аудита.",
+        ])
+        _, functions = extract_units_and_functions([source])
+        self.assertFalse(any("Руководитель направления" in f.text for f in functions))
+        self.assertFalse(any("Директор проектов" in f.text for f in functions))
+        self.assertTrue(any("руководит подготовкой" in f.text for f in functions))
+
     def test_alias_and_inflected_heading_keep_owner_and_heading_evidence(self):
         source = document(CATALOG + [
             "5.4. Директор департамента методологии (ДМ):",
