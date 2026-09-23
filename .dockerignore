@@ -18,3 +18,9 @@ REQUIREMENTS_AUDIT.md
 FUNCTION_MATRIX_SPEC.md
 DEMO_SCENARIO.md
 .DS_Store
+
+# Private metrics sources, persisted runs and knowledge base
+runs/
+data/reports/
+data/synthetic_reports/
+data/kb.sqlite*

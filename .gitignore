@@ -7,3 +7,9 @@ __pycache__/
 .streamlit/secrets.toml
 .pytest_cache/
 uploads/
+
+# Private metrics sources, persisted runs and knowledge base
+runs/
+data/reports/
+data/synthetic_reports/
+data/kb.sqlite*
