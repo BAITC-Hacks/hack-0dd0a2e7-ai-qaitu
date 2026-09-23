@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 
 @dataclass(frozen=True)
@@ -86,6 +86,7 @@ class AnalysisResult:
     units_before: list[str] = field(default_factory=list)
     units_after: list[str] = field(default_factory=list)
     coverage: dict[str, int] = field(default_factory=dict)
+    ai_review: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)

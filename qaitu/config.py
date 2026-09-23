@@ -12,7 +12,7 @@ except ModuleNotFoundError:  # Python 3.10
     import tomli as tomllib
 
 
-DEFAULT_MODEL = "gpt-4.1-mini"
+DEFAULT_MODEL = "gpt-5.4-mini"
 
 
 @dataclass(frozen=True)
