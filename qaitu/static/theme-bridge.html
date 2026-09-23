@@ -6,13 +6,20 @@
     const style = getComputedStyle(app);
     document.body.style.colorScheme = style.colorScheme;
     for (const name of ['bg', 'text', 'accent', 'muted', 'line', 'glass', 'solid', 'shadow']) {
-      document.body.style.setProperty(`--qa-${name}`, style.getPropertyValue(`--qa-${name}`));
+      const value = style.getPropertyValue(`--qa-${name}`);
+      if (value.trim()) document.body.style.setProperty(`--qa-${name}`, value);
     }
   };
   const key = Symbol.for('qaitu.themeObserver');
   window[key]?.disconnect();
-  window[key] = new MutationObserver(sync);
-  window[key].observe(app, { attributes: true, attributeFilter: ['class', 'style'] });
+  window[key] = new MutationObserver(records => {
+    // Streamlit inserts the stylesheet separately from this script on a cold
+    // load. Also sync when it arrives, without observing our own body styles.
+    if (records.some(record => record.type === 'childList' || record.target === app)) sync();
+  });
+  window[key].observe(document.documentElement, {
+    childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'],
+  });
   sync();
 })();
 </script>

@@ -11,6 +11,7 @@ def apply_theme():
     # Native dialogs/popovers are portaled outside .stApp. Mirror only our theme
     # tokens so they follow Streamlit's manual theme as well as the system theme.
     st.html(Path(__file__).with_name("static") / "theme-bridge.html", unsafe_allow_javascript=True)
+    st.html(Path(__file__).with_name("static") / "matrix-fit.html", unsafe_allow_javascript=True)
 
 
 def sidebar_brand():
