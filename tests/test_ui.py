@@ -171,7 +171,7 @@ class InterfaceTests(unittest.TestCase):
         reviewer.assert_not_called()
         self.assertFalse(app.exception, [error.message for error in app.exception])
         expanded = [item.value for item in app.markdown if "<table" in item.value][-1]
-        self.assertEqual(expanded.count('<tr class='), 25)
+        self.assertEqual(expanded.count('<tr class='), 10)
         self.assertIn("Функция 24", expanded)
         app.run()
         self.assertEqual(widget(app.selectbox, "Страница матрицы").value, page_before)

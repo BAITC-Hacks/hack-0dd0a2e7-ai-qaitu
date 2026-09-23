@@ -1,0 +1,58 @@
+<script>
+(() => {
+  // The expanded view fits both axes, including after resizing a split pane.
+  // Only trusted layout code runs here; document values remain escaped HTML.
+  const key = Symbol.for('qaitu.matrixFit');
+  window[key]?.();
+  let frame = 0;
+  let current = null;
+  const fit = () => {
+    frame = 0;
+    const wrap = document.querySelector('.st-key-expanded_matrix .qa-matrix-wrap');
+    const table = wrap?.querySelector('table');
+    if (!table) return;
+    if (wrap !== current) {
+      resize.disconnect();
+      resize.observe(wrap);
+      current = wrap;
+    }
+    const dialog = wrap.closest('[role="dialog"]');
+    const bottom = Math.min(innerHeight, dialog.parentElement.getBoundingClientRect().bottom);
+    const height = Math.max(40, Math.floor(bottom - wrap.getBoundingClientRect().top - 20));
+    wrap.style.setProperty('--qa-matrix-height', `${height}px`);
+    const width = wrap.clientWidth;
+    if (!width) return;
+    const measure = scale => {
+      table.style.zoom = scale;
+      table.style.width = `${width / scale}px`;
+      return table.getBoundingClientRect().height;
+    };
+    let scale = 1;
+    if (measure(1) > wrap.clientHeight - 2) {
+      let low = 0.01, high = 1;
+      for (let i = 0; i < 12; i++) {
+        const middle = (low + high) / 2;
+        if (measure(middle) <= wrap.clientHeight - 2) low = middle;
+        else high = middle;
+      }
+      scale = low;
+    }
+    measure(scale);
+    wrap.scrollTop = 0;
+    wrap.scrollLeft = 0;
+  };
+  const schedule = () => { if (!frame) frame = requestAnimationFrame(fit); };
+  const resize = new ResizeObserver(schedule);
+  const mutations = new MutationObserver(schedule);
+  mutations.observe(document.body, { childList: true, subtree: true });
+  window.addEventListener('resize', schedule);
+  document.fonts.ready.then(schedule);
+  window[key] = () => {
+    cancelAnimationFrame(frame);
+    resize.disconnect();
+    mutations.disconnect();
+    window.removeEventListener('resize', schedule);
+  };
+  schedule();
+})();
+</script>

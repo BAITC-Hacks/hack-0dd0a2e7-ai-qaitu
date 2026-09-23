@@ -165,7 +165,7 @@ def expanded_matrix(rows, units, before_units, after_units, selected_id, initial
     with st.container(key="expanded_matrix"):
         count, paging, legend = st.columns([3, 1, 1], vertical_alignment="center")
         count.caption(f"Функций: {len(rows)} · владельцев: {len(units)} · текущие фильтры")
-        page_size = 25
+        page_size = 10
         page_count = max(1, (len(rows) + page_size - 1) // page_size)
         with paging:
             page = st.selectbox("Страница развёрнутой матрицы", range(page_count),
