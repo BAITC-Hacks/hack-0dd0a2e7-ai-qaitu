@@ -228,6 +228,10 @@ if result.warnings:
         for warning in result.warnings:
             st.warning(warning)
 
+st.caption(
+    f"Охват: документов до/после — {result.coverage.get('documents_before', 0)}/{result.coverage.get('documents_after', 0)}; "
+    f"исходных фрагментов — {result.coverage.get('fragments_before', 0) + result.coverage.get('fragments_after', 0)}."
+)
 counts = Counter(finding.kind for finding in result.findings)
 columns = st.columns(4)
 for column, label, number, explanation in zip(columns,
@@ -237,7 +241,7 @@ for column, label, number, explanation in zip(columns,
     column.metric(label, number, help=explanation)
 st.caption("Количество индикаторов, а не подтверждённых нарушений. Числовая уверенность эвристики не является вероятностью правильного вывода.")
 
-tab_matrix, tab_summary, tab_units, tab_sources = st.tabs(["Матрица функций", "Заключение", "Структура", "Источники и охват"])
+tab_summary, tab_units, tab_matrix, tab_sources = st.tabs(["Заключение", "Структура", "Матрица функций", "Источники и охват"])
 
 with tab_matrix:
     st.subheader("Функция × подразделение")
@@ -335,6 +339,10 @@ with tab_summary:
             for source in finding.sources:
                 render_source(source)
                 st.divider()
+    st.markdown("**Изменения структуры**")
+    for change in result.unit_changes:
+        st.write(f"{STATUS_LABELS.get(change.status, change.status)}: {change.before or '—'} → {change.after or '—'}")
+    st.caption("Полная матрица доступна в соседней вкладке и в скачиваемом подробном отчёте.")
 
 with tab_units:
     st.subheader("Изменения организационной структуры")

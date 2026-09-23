@@ -92,6 +92,33 @@ def main() -> int:
     check("R05: права работников не потеряны из-за перенумерации", bool(right_rows) and all(
         row.after and row.status != "lost" for row in right_rows
     ))
+    split_rows = [row for row in result.matrix_rows if any(
+        "организация работы проектной команды по проверке" in f.text.casefold()
+        for f in row.before
+    )]
+    check("R15: составная обязанность связана с двумя новыми пунктами", any(
+        row.status != "lost" and {"5.3.4", "5.3.5б"} <= {
+            reference for f in row.after
+            for reference in ("5.3.4", "5.3.5б") if f"п. {reference}" in f.source.locator
+        }
+        for row in split_rows
+    ))
+    check("R15: согласование результатов не помечено потерянным", any(
+        row.status != "lost" and any("п. 5.3.5в" in f.source.locator for f in row.after)
+        for row in result.matrix_rows if any("обсуждение и согласование результатов проверок" in f.text.casefold() for f in row.before)
+    ))
+    check("R15: разработка документации сопоставлена с ВНД", any(
+        row.status != "lost" and any("п. 5.3.12" in f.source.locator for f in row.after)
+        for row in result.matrix_rows if any("проектов документации" in f.text.casefold() for f in row.before)
+    ))
+    all_functions = [f for row in result.matrix_rows for f in row.before + row.after]
+    check("R15: титул и определения не являются функциями", not any(
+        f.source.text.startswith("УТВЕРЖДЕНО") or "п. 14" in f.source.locator for f in all_functions
+    ))
+    check("R15: явный руководитель БВА установлен", any(
+        "п. 1.4" in f.source.locator and f.unit == "Главный аудитор"
+        for f in all_functions
+    ))
     known = {fragment.id for document in documents for fragment in document.fragments}
     check("R14: выводы и назначения ссылаются на загруженные источники", all(
         source.id in known for row in result.matrix_rows for function in row.before + row.after
