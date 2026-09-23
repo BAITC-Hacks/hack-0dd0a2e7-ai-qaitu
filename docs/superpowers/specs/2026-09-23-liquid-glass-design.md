@@ -32,8 +32,16 @@ matrix meanings. Use 24px panel, 16px control, and pill navigation radii.
 
 The welcome screen explains the upload > compare > inspect workflow with a
 clear hierarchy. It includes an actionable control example and clearly identifies
-synthetic data. The result screen keeps the current tabs and exposes the matrix
-without decorative interruption.
+synthetic data. After analysis, six native anchor links remain pinned above the
+report: overview, matrix, conclusion, structure, sources, and export. All sections
+are visible in one report, and navigation preserves filters and analysis state.
+
+The completed workspace expands to 1840px. The matrix has a wider function
+column, ten rows per page and a 480px scroll region. Evidence appears in balanced
+before/after columns, stacking when the available area is narrower than 860px.
+Source metadata is secondary, body text uses a readable sans-serif face, and
+repeated quotations expand on demand. Informational notices use the neutral
+green palette while warning/error and matrix status colors retain their meaning.
 
 ## Implementation and verification
 
@@ -45,5 +53,5 @@ Acceptance: desktop and narrow mobile views have no page overflow; the matrix
 scrolls within its named region; keyboard focus remains visible; native light
 and dark themes remain readable; reduced motion, increased contrast and reduced
 transparency have useful fallbacks. Check initial state, missing uploads, demo,
-all four tabs, filters, citations, and both exports in addition to the existing
+all six anchors, pagination, filters, citations, and both exports in addition to the existing
 unittest suite. Record before/after screenshots and a reproducible change patch.

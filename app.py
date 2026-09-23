@@ -11,7 +11,7 @@ from qaitu.ai_reviewer import MAX_BATCHES, MAX_BATCH_CHARS, MAX_REVIEW_SECONDS, 
 from qaitu.analyzer import analyze_documents
 from qaitu.demo import demo_documents
 from qaitu.extractors import extract_document
-from qaitu.presentation import apply_theme, sidebar_brand, welcome, workspace_header
+from qaitu.presentation import apply_theme, result_navigation, sidebar_brand, welcome, workspace_header
 from qaitu.reporting import COVERAGE_LABELS, FINDING_LABELS, NORM_LABELS, ROLE_LABELS, STATUS_LABELS, collect_sources, compact_unit_labels, markdown_report, ordered_matrix_rows
 
 
@@ -21,7 +21,7 @@ apply_theme()
 
 def render_source(source, *, context=False):
     st.caption(("Контекст · " if context else "") + ("ДО" if source.period == "before" else "ПОСЛЕ") + " · " + source.document)
-    st.text(f"{source.locator} · {source.id}")
+    st.caption(f"{source.locator} · {source.id}")
     st.text(source.text)
 
 
@@ -31,14 +31,14 @@ def render_assignments(functions):
         return
     for function in functions:
         with st.container(border=True):
-            st.write(function.unit)
+            st.markdown(f'<h4 class="qa-assignment-title">{html.escape(function.unit)}</h4>', unsafe_allow_html=True)
             st.caption(NORM_LABELS.get(function.norm_type, function.norm_type) + " · " + ROLE_LABELS.get(function.role, function.role))
             if not function.owner_known:
                 st.warning("Владелец требует проверки по контексту.")
             if function.scope:
                 st.text("Область: " + function.scope)
             st.text(function.text)
-            with st.expander("Цитата и контекст назначения", expanded=True):
+            with st.expander("Цитата и контекст назначения", expanded=False):
                 render_source(function.source)
                 seen = {function.source.id}
                 for context in function.context_sources:
@@ -97,7 +97,7 @@ def render_matrix(rows, units, before_units, after_units, selected_id, compact=T
         label = row.label if len(row.label) <= 170 else row.label[:167] + "…"
         note = STATUS_LABELS.get(row.status, row.status) + (" · ⚑ проверить пересечение" if row.candidate_overlap else "")
         selected = "qa-selected" if row.id == selected_id else ""
-        parts.append(f'<tr class="{selected}"><td class="qa-label" title="{esc(row.label)}">{esc(label)}<small>{esc(note)}</small></td>')
+        parts.append(f'<tr class="{selected}"><td class="qa-label" title="{esc(row.label)}"><span class="qa-function-text">{esc(label)}</span><small>{esc(note)}</small></td>')
         for side, present in (("before", before_units), ("after", after_units)):
             for index, unit in enumerate(units):
                 css, text, description = matrix_cell(row, unit, side, present)
@@ -173,6 +173,8 @@ if result is None:
         st.rerun()
     st.stop()
 
+result_navigation()
+st.header("Обзор анализа", anchor="overview")
 sources = collect_sources(result)
 document_packs = st.session_state.get("document_packs", {})
 is_demo = st.session_state.get("mode") == "demo"
@@ -197,10 +199,13 @@ for column, label, number, explanation in zip(columns,
     column.metric(label, number, help=explanation)
 st.caption("Количество индикаторов, а не подтверждённых нарушений. Числовая уверенность эвристики не является вероятностью правильного вывода.")
 
-tab_matrix, tab_summary, tab_units, tab_sources = st.tabs(["Матрица функций", "Заключение", "Структура", "Источники и охват"])
+matrix_section = st.container(key="matrix_section")
+summary_section = st.container(key="summary_section")
+units_section = st.container(key="units_section")
+sources_section = st.container(key="sources_section")
 
-with tab_matrix:
-    st.header("Функция × подразделение")
+with matrix_section:
+    st.header("Функция × подразделение", anchor="matrix")
     st.caption("Одинаковые колонки до / после. Статусы рассчитаны по полному комплекту; фильтры меняют только отображение.")
     pack_columns = st.columns(2)
     for column, period, label in zip(pack_columns, ("before", "after"), ("ДО", "ПОСЛЕ")):
@@ -238,7 +243,7 @@ with tab_matrix:
     if not rows or not units:
         st.info("Для выбранных условий строки не найдены. Измените фильтр или проверьте охват извлечения.")
     else:
-        page_size = 30
+        page_size = 10
         page_count = (len(rows) + page_size - 1) // page_size
         display_options, row_picker = st.columns([1, 2.5], vertical_alignment="bottom")
         with display_options:
@@ -264,7 +269,8 @@ with tab_matrix:
             st.warning("Несколько владельцев: сопоставьте роли и область ответственности. Несколько отметок сами по себе не доказывают дубль.")
         for note in row.notes:
             st.info(note)
-        before_column, after_column = st.columns(2, gap="large")
+        with st.container(key="evidence_columns"):
+            before_column, after_column = st.columns(2, gap="medium")
         with before_column:
             st.markdown("**ДО / исходные назначения**")
             render_assignments(row.before)
@@ -272,8 +278,8 @@ with tab_matrix:
             st.markdown("**ПОСЛЕ / найденные назначения**")
             render_assignments(row.after)
 
-with tab_summary:
-    st.header("Что проверить в первую очередь")
+with summary_section:
+    st.header("Что проверить в первую очередь", anchor="conclusion")
     st.caption("Каждый вывод опирается на фрагменты. Подтверждение нарушения и решение о перераспределении остаются за сотрудником.")
     unit_counts = Counter(change.status for change in result.unit_changes)
     assignment_counts = Counter(row.status for row in result.matrix_rows)
@@ -299,12 +305,17 @@ with tab_summary:
                 render_source(source)
                 st.divider()
 
-with tab_units:
-    st.header("Изменения организационной структуры")
+with units_section:
+    st.header("Изменения организационной структуры", anchor="structure")
     st.caption("Появление или отсутствие в перечне не доказывает юридическое создание, ликвидацию или преобразование без распорядительного документа.")
     if result.unit_changes:
         data = [{"Статус": STATUS_LABELS.get(item.status, item.status), "До": item.before or "—", "После": item.after or "—", "Источники": ", ".join(source.id for source in item.sources)} for item in result.unit_changes]
-        st.dataframe(pd.DataFrame(data), width="stretch", hide_index=True)
+        st.dataframe(pd.DataFrame(data), width="stretch", hide_index=True, row_height=56,
+            height=min(56 * len(data) + 40, 440),
+            column_config={"Статус": st.column_config.TextColumn(width="medium"),
+                           "До": st.column_config.TextColumn(width="large"),
+                           "После": st.column_config.TextColumn(width="large"),
+                           "Источники": st.column_config.TextColumn(width="medium")})
         unit_index = st.selectbox("Проверить изменение по источникам", range(len(result.unit_changes)), format_func=lambda index: (result.unit_changes[index].before or "—") + " → " + (result.unit_changes[index].after or "—"))
         for source in result.unit_changes[unit_index].sources:
             with st.container(border=True):
@@ -312,8 +323,8 @@ with tab_units:
     else:
         st.info("Изменения структуры не выделены. Проверьте заголовки и качество извлечённого текста.")
 
-with tab_sources:
-    st.header("Проверяемость и охват")
+with sources_section:
+    st.header("Проверяемость и охват", anchor="sources")
     source_counts = Counter(source.period for source in sources)
     c1, c2, c3 = st.columns(3)
     c1.metric("Фрагменты до", source_counts["before"])
@@ -349,6 +360,7 @@ with tab_sources:
         st.info("Совпадений нет. Попробуйте другой пункт или ключевое слово.")
 
 st.divider()
+st.header("Скачать результат", anchor="export")
 download1, download2, note = st.columns([1, 1, 2])
 with download1:
     st.download_button("↓ Заключение Markdown", markdown_report(result, is_demo=is_demo), file_name="qaitu-conclusion.md", mime="text/markdown", width="stretch", on_click="ignore")
