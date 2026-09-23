@@ -110,6 +110,69 @@ class AnalyzerTest(unittest.TestCase):
         ]
         self.assertEqual(_find_conflicts(duties), [])
 
+    def test_compound_duty_is_linked_to_two_new_clauses(self):
+        before = [document_from_lines("old.docx", "before", [
+            "3.4. БВА состоит из следующих структурных подразделений:",
+            "а. Департамент внутреннего аудита (ДВА).",
+            "5.3. Директор ДВА:",
+            "5.3.1. организация работы проектной команды по проверке и организация контроля качества работы проектной команды.",
+        ])]
+        after = [document_from_lines("new.docx", "after", [
+            "3.4. БВА состоит из следующих структурных подразделений:",
+            "а. Департамент операционного аудита (ДОА).",
+            "5.3. Директор ДОА:",
+            "5.3.1. организует работу проектных команд в зоне ответственности.",
+            "5.3.2. контроль качества работы проектной команды.",
+        ])]
+        result = analyze_documents(before, after)
+        row = next(row for row in result.matrix_rows if "организация работы проектной команды" in row.label)
+        self.assertEqual(row.status, "moved")
+        self.assertEqual({f.source.locator for f in row.after}, {"строка 4, п. 5.3.1", "строка 5, п. 5.3.2"})
+        self.assertFalse(any(f.kind == "loss" and f.matrix_row_id == row.id for f in result.findings))
+
+    def test_discussion_agreement_and_vnd_rewording_are_not_lost(self):
+        before = [document_from_lines("old.docx", "before", [
+            "3.4. БВА состоит из следующих структурных подразделений:",
+            "а. Департамент внутреннего аудита (ДВА).",
+            "5.3. Директор ДВА:",
+            "5.3.1. обсуждение и согласование результатов проверок с Руководителями Общества по проверяемым направлениям.",
+            "5.3.2. участвует в разработке проектов документации, регламентирующей работу БВА.",
+        ])]
+        after = [document_from_lines("new.docx", "after", [
+            "3.4. БВА состоит из следующих структурных подразделений:",
+            "а. Департамент операционного аудита (ДОА).",
+            "5.3. Директор ДОА:",
+            "5.3.1. согласование результатов проверок с Руководителями Общества по проверяемым направлениям.",
+            "5.3.2. участвуют в разработке ВНД БВА.",
+        ])]
+        result = analyze_documents(before, after)
+        for phrase in ("обсуждение и согласование", "проектов документации"):
+            row = next(row for row in result.matrix_rows if phrase in row.label)
+            self.assertTrue(row.after, phrase)
+            self.assertNotEqual(row.status, "lost")
+
+    def test_cover_is_not_a_duty_and_explicit_chief_auditor_is_owner(self):
+        document = document_from_lines("regulation.pdf", "before", [
+            "УТВЕРЖДЕНО Советом директоров Протокол No 7 ПОЛОЖЕНИЕ О ВНУТРЕННЕМ АУДИТЕ",
+            "1.4. Руководство БВА осуществляет Главный аудитор в соответствии с Уставом Общества.",
+        ])
+        _, functions = extract_units_and_functions([document])
+        self.assertFalse(any("УТВЕРЖДЕНО" in function.source.text for function in functions))
+        leadership = [function for function in functions if "Руководство БВА" in function.source.text]
+        self.assertTrue(leadership)
+        self.assertTrue(all(function.unit == "Главный аудитор" for function in leadership))
+
+    def test_definitions_describe_terms_not_assignments(self):
+        document = document_from_lines("regulation.docx", "before", [
+            "5.1. Главный аудитор организует работу БВА.",
+            "14. Термины и определения",
+            "Риск — потенциальное событие, которое влияет на цели Общества.",
+            "Непрерывный аудит — метод, который обеспечивает оценку рисков и проверку данных.",
+        ])
+        _, functions = extract_units_and_functions([document])
+        self.assertTrue(any("организует работу" in function.text for function in functions))
+        self.assertFalse(any("потенциальное событие" in function.source.text or "Непрерывный аудит" in function.source.text for function in functions))
+
 
 if __name__ == "__main__":
     unittest.main()

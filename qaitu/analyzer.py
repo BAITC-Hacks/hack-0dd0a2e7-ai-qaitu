@@ -55,7 +55,10 @@ def _clause(text: str) -> str:
 
 
 def _norm(text: str) -> str:
-    return " ".join(re.findall(r"[а-яa-z0-9]+", text.lower().replace("ё", "е")))
+    text = text.lower().replace("ё", "е")
+    text = re.sub(r"проект(?:ов|ы)? документации,? регламентирующей работу бва", "внд бва", text)
+    text = re.sub(r"внутренних нормативных документов", "внд", text)
+    return " ".join(re.findall(r"[а-яa-z0-9]+", text))
 
 
 @lru_cache(maxsize=30000)
@@ -158,6 +161,8 @@ def _subject_owners(body: str, catalog: _Catalog, *, heading: bool = False) -> l
     owners = catalog.mentions(prefix)
     if owners:
         return owners
+    if re.match(r"^руководство\s+(?:бва|блока внутреннего аудита)\s+осуществля\w*\s+главный\s+аудитор\b", body, re.I):
+        return ["Главный аудитор"]
     if heading and re.search(r"^директоры\s+департаментов\b", body, re.I):
         # An unresolved explicit abbreviation narrows the group; it must not
         # silently expand to every known department.
@@ -190,6 +195,8 @@ def _norm_type(text: str, inherited: str) -> str:
 
 def _role(text: str) -> str:
     text = _norm(_body(text))
+    if re.match(r"обсуждени\w* и согласовани", text):
+        return "agree"
     if re.match(r"(?:провер|контрол|оценив|оценк|аудит|мониторинг)|(?:провод|провед)\w*\s+(?:аудит|провер|оценк)", text):
         return "control"
     if re.match(r"(?:утвержд|утверждение)", text):
@@ -234,6 +241,7 @@ def extract_units_and_functions(documents: list[Document]) -> tuple[dict[str, li
     functions: list[Function] = []
     seen: set[tuple] = set()
     for document in documents:
+        in_definitions = False
         owners: list[str] = []
         contexts: list[Fragment] = []
         owner_prefix = ""
@@ -244,7 +252,19 @@ def extract_units_and_functions(documents: list[Document]) -> tuple[dict[str, li
         for index, fragment in enumerate(document.fragments):
             text = fragment.text.strip()
             body, clause = _body(text), _clause(text)
+            if re.match(r"^термины\s+и\s+определения\b", body, re.I):
+                in_definitions = True
+                owners, contexts, scopes = [], [], {}
+                continue
+            if in_definitions:
+                # A later numbered section may resume substantive assignments.
+                if re.match(r"^\s*\d{1,2}\.\s*[А-Яа-яA-Za-z]", text):
+                    in_definitions = False
+                else:
+                    continue
             is_letter = bool(LETTER.match(text))
+            if re.match(r"^УТВЕРЖДЕНО\b", body, re.I):
+                continue
             if not body or body.strip(".;:") == "":
                 continue
             if (is_letter or body.endswith(".")) and re.match(r"^(?:директор|руководитель|менеджер|аудитор)\s+", body, re.I) and not FINITE.search(body) and not MODAL.search(body):
@@ -278,9 +298,12 @@ def extract_units_and_functions(documents: list[Document]) -> tuple[dict[str, li
                     scopes = {}
                     contexts = [fragment]
                     inherited = "duty"
+                    if not heading_only:
+                        owner_prefix = clause
                 owners = explicit
                 contexts = [fragment] if heading_only else contexts
-                owner_prefix = clause if heading_only else (clause.rsplit(".", 1)[0] if "." in clause else owner_prefix)
+                if heading_only:
+                    owner_prefix = clause
             if heading_only:
                 contexts = [fragment]
                 inherited = _norm_type(body, inherited)
@@ -302,7 +325,7 @@ def extract_units_and_functions(documents: list[Document]) -> tuple[dict[str, li
             else:
                 if not ACTION.search(body):
                     continue
-                if not owners and not FINITE.search(body) and not ACTION.match(body):
+                if not owners and not FINITE.search(body):
                     # Definitions, titles and references merely mentioning an
                     # activity aren't assignments.
                     continue
@@ -317,7 +340,10 @@ def extract_units_and_functions(documents: list[Document]) -> tuple[dict[str, li
                 if next_is_letter:
                     intro = fragment
                     intro_text = chunks[-1] if chunks else body
-                    chunks = chunks[:-1]
+                    # A numbered introduction may be an actual duty as well as
+                    # the context for its lettered subitems (e.g. 5.3.4).
+                    if not FINITE.search(intro_text) or len(_tokens(intro_text)) < 3:
+                        chunks = chunks[:-1]
             if not assignment_owners:
                 assignment_owners = [UNKNOWN_OWNER]
             for chunk in chunks:
@@ -328,7 +354,8 @@ def extract_units_and_functions(documents: list[Document]) -> tuple[dict[str, li
                 # actions; an explicit subitem verb overrides its introduction.
                 chunk_type = _norm_type(chunk, inherited)
                 explicit_action = bool(FINITE.match(chunk) or re.match(r"^(?:не\s+)?(?:провер|контрол|оценк|аудит|соглас|утвержд)", chunk, re.I))
-                action_role = _role(intro_text if is_letter and intro_text and not explicit_action else chunk)
+                own_role = bool(re.match(r"^обсуждени\w*\s+и\s+согласовани", _norm(chunk)))
+                action_role = _role(intro_text if is_letter and intro_text and not (explicit_action or own_role) else chunk)
                 for owner in assignment_owners:
                     context = active_context[:]
                     if owner in catalog.units:
@@ -400,11 +427,19 @@ def _match_units_with_profiles(
 
 
 def _same_action(left: Function, right: Function) -> bool:
-    if left.norm_type != right.norm_type or left.role != right.role:
+    if left.norm_type != right.norm_type:
+        return False
+    if left.role != right.role:
         return False
     la, ra = ACTION.search(left.text), ACTION.search(right.text)
     if la and ra and la.start() < 12 and ra.start() < 12:
-        return _stem(la.group()) == _stem(ra.group())
+        if _stem(la.group()) == _stem(ra.group()):
+            return True
+        # A combined old assignment can be split into separate new clauses.
+        # Require substantial text overlap as well as a shared action stem.
+        old_actions = {_stem(match.group()) for match in ACTION.finditer(left.text)}
+        new_actions = {_stem(match.group()) for match in ACTION.finditer(right.text)}
+        return bool(old_actions & new_actions) and _similarity(left.text, right.text) >= 0.70
     return True
 
 
@@ -419,6 +454,52 @@ def _function_similarity(left: Function, right: Function) -> float:
             # Keep it as a changed formulation instead of a spurious loss.
             score = max(score, 0.82)
     return score
+
+
+def _action_stems(text: str) -> set[str]:
+    return {_stem(match.group()) for match in ACTION.finditer(text)}
+
+
+def _merge_split_actions(rows: list[MatrixRow]) -> None:
+    """Link a compound old duty to separately documented new sub-duties."""
+    consumed: set[int] = set()
+    for old_row in rows:
+        if not old_row.before or old_row.after:
+            continue
+        old_text = " ".join(function.text for function in old_row.before)
+        actions = _action_stems(old_text)
+        if len(actions) < 2:
+            continue
+        old_objects = _tokens(old_text) - actions
+        matches: dict[str, MatrixRow] = {}
+        for candidate in rows:
+            if candidate is old_row or id(candidate) in consumed or candidate.before or not candidate.after or candidate.norm_type != old_row.norm_type:
+                continue
+            candidate_actions = _action_stems(candidate.label) & actions
+            shared_objects = old_objects & (_tokens(candidate.label) - _action_stems(candidate.label))
+            if len(shared_objects) < 2:
+                continue
+            for action in candidate_actions:
+                if action not in matches or len(shared_objects) > len(old_objects & _tokens(matches[action].label)):
+                    matches[action] = candidate
+        selected = {id(candidate): candidate for candidate in matches.values()}
+        if len(matches) < 2 or len(selected) < 2:
+            continue
+        for candidate in selected.values():
+            old_row.after.extend(candidate.after)
+            consumed.add(id(candidate))
+        old_row.notes.append("Составная прежняя функция сопоставлена с несколькими новыми пунктами; проверьте оба назначения.")
+    rows[:] = [row for row in rows if id(row) not in consumed]
+
+
+def _possible_abbreviation(old: Function, new: Function) -> bool:
+    if old.norm_type != new.norm_type or old.role != new.role:
+        return False
+    old_first, new_first = ACTION.search(old.text), ACTION.search(new.text)
+    if not old_first or not new_first or _stem(old_first.group()) != _stem(new_first.group()):
+        return False
+    short, long = _tokens(new.text), _tokens(old.text)
+    return 2 <= len(short) <= 4 and len(long) > len(short) and len(short & long) / len(short) >= 0.75
 
 
 def _matrix_rows(before: list[Function], after: list[Function], incomplete_after: bool = False) -> list[MatrixRow]:
@@ -437,6 +518,7 @@ def _matrix_rows(before: list[Function], after: list[Function], incomplete_after
             else:
                 row_id = "row:" + hashlib.sha256(f"{function.norm_type}|{function.role}|{_norm(function.text)}".encode()).hexdigest()[:14]
                 rows.append(MatrixRow(row_id, function.text, [function] if side == "before" else [], [function] if side == "after" else [], "", function.norm_type))
+    _merge_split_actions(rows)
     for row in rows:
         old = {f.unit for f in row.before if f.owner_known}
         new = {f.unit for f in row.after if f.owner_known}
@@ -444,7 +526,10 @@ def _matrix_rows(before: list[Function], after: list[Function], incomplete_after
             row.status = "unknown"
             row.notes.append("Владелец части назначений не установлен; отсутствие отметки не доказывает потерю.")
         elif not row.after:
-            candidates = [f for f in after if any(_function_similarity(old_f, f) >= 0.56 for old_f in row.before)]
+            candidates = [f for f in after if any(
+                _function_similarity(old_f, f) >= 0.56 or _possible_abbreviation(old_f, f)
+                for old_f in row.before
+            )]
             if incomplete_after or candidates:
                 row.status = "unknown"
                 row.notes.append("Нужно проверить возможную переформулировку или неполноту извлечения; потеря не подтверждена.")
