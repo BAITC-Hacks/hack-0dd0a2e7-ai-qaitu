@@ -78,6 +78,28 @@ class AnalyzerTest(unittest.TestCase):
         self.assertEqual({change.status for change in result.unit_changes}, {"preserved", "created"})
         self.assertEqual(sum(finding.kind == "loss" for finding in result.findings), 0)
 
+    def test_shared_administrative_duties_are_not_reported_as_duplicates(self):
+        before = [document_from_lines("before", "before", [
+            "Отдел А проверяет закупочные процедуры.",
+        ])]
+        after = [document_from_lines("after", "after", [
+            "Отдел А осуществляет выполнение прочих поручений Главного аудитора.",
+            "Отдел Б осуществляет выполнение прочих поручений Главного аудитора.",
+        ])]
+        result = analyze_documents(before, after)
+        self.assertEqual(sum(finding.kind == "duplicate" for finding in result.findings), 0)
+
+    def test_repeated_old_duty_is_not_reported_lost_when_one_new_owner_remains(self):
+        before = [document_from_lines("before", "before", [
+            "Отдел А ведет реестр аудиторских рекомендаций.",
+            "Отдел Б ведет реестр аудиторских рекомендаций.",
+        ])]
+        after = [document_from_lines("after", "after", [
+            "Управление В ведет реестр аудиторских рекомендаций.",
+        ])]
+        result = analyze_documents(before, after)
+        self.assertEqual(sum(match.status == "lost" for match in result.function_matches), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

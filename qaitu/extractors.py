@@ -25,6 +25,21 @@ def _fragment(name: str, period: Period, locator: str, text: str, n: int) -> Fra
     return Fragment(f"{period}:{document_key}:{n}", name, cleaned, locator, period)
 
 
+def _pdf_page_text(page) -> str:
+    plain = page.extract_text() or ""
+    lines = [line.strip() for line in plain.splitlines() if line.strip()]
+    if len(lines) > 20 and sum(len(line.split()) <= 1 for line in lines) / len(lines) > 0.65:
+        layout = page.extract_text(extraction_mode="layout") or ""
+        if layout.strip():
+            return layout
+    return plain
+
+
+def _pdf_fragments(text: str) -> list[str]:
+    # Keep wrapped lines inside their numbered clause, while separating list items.
+    return re.split(r"\n\s*\n|\n(?=\s*(?:\d+(?:\.\d+)+\.|[а-я]\.)\s+)", text, flags=re.I)
+
+
 def extract_document(file: BinaryIO, name: str, period: Period) -> Document:
     """Extract traceable text fragments from PDF, DOCX or XLSX."""
     suffix = Path(name).suffix.lower()
@@ -37,7 +52,7 @@ def extract_document(file: BinaryIO, name: str, period: Period) -> Document:
         reader = PdfReader(io.BytesIO(data))
         n = 0
         for page_no, page in enumerate(reader.pages, 1):
-            for paragraph in re.split(r"\n\s*\n|\n(?=\s*\d+(?:\.\d+)+)", page.extract_text() or ""):
+            for paragraph in _pdf_fragments(_pdf_page_text(page)):
                 if _clean(paragraph):
                     n += 1
                     fragments.append(_fragment(name, period, f"стр. {page_no}", paragraph, n))

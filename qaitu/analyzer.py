@@ -28,6 +28,8 @@ STOPWORDS = {
 
 def _norm(text: str) -> str:
     text = text.lower().replace("ё", "е")
+    text = re.sub(r"проектов документации,? регламентирующей работу", "внд", text)
+    text = re.sub(r"внутренних нормативных документов", "внд", text)
     return " ".join(re.findall(r"[а-яa-z0-9]+", text))
 
 
@@ -197,10 +199,10 @@ def _match_units(
 
 def _match_functions(before: list[Function], after: list[Function]) -> list[FunctionMatch]:
     result: list[FunctionMatch] = []
-    unused_after = set(range(len(after)))
+    matched_after: set[int] = set()
     for old in before:
-        if unused_after:
-            idx, score = max(((idx, _similarity(old.text, after[idx].text)) for idx in unused_after), key=lambda x: x[1])
+        if after:
+            idx, score = max(((idx, _similarity(old.text, candidate.text)) for idx, candidate in enumerate(after)), key=lambda x: x[1])
         else:
             idx, score = -1, 0.0
         if score >= 0.43:
@@ -208,18 +210,33 @@ def _match_functions(before: list[Function], after: list[Function]) -> list[Func
             same_unit = _similarity(old.unit, new.unit) >= 0.65
             status = "preserved" if same_unit and score >= 0.72 else ("moved" if not same_unit else "changed")
             result.append(FunctionMatch(old, new, round(score, 2), status))
-            unused_after.remove(idx)
+            matched_after.add(idx)
         else:
             result.append(FunctionMatch(old, None, round(score, 2), "lost"))
-    for idx in sorted(unused_after):
+    for idx in sorted(set(range(len(after))) - matched_after):
         result.append(FunctionMatch(None, after[idx], 0.0, "new"))
     return result
+
+
+def _is_generic_duty(text: str) -> bool:
+    normalized = _norm(text)
+    return any(re.search(pattern, normalized) for pattern in (
+        r"прочих поручени",
+        r"организу\w* работу (?:днм|дккм|департамент)",
+        r"повышени\w* профессионального уровня",
+        r"по всему кругу вопросов",
+        r"участву\w* в разработке (?:внд|проектов документации)",
+    ))
 
 
 def _find_duplicates(functions: list[Function]) -> list[Finding]:
     findings: list[Finding] = []
     for i, left in enumerate(functions):
+        if _is_generic_duty(left.text):
+            continue
         for right in functions[i + 1:]:
+            if _is_generic_duty(right.text):
+                continue
             if _similarity(left.unit, right.unit) >= 0.75:
                 continue
             score = _similarity(left.text, right.text)
