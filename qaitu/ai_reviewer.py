@@ -8,6 +8,7 @@ from collections import Counter, defaultdict
 from typing import Any
 
 from .models import AnalysisResult, Document, Finding, Fragment
+from .confidence import reported_assessment
 
 
 MAX_BATCH_CHARS = 60_000
@@ -241,9 +242,10 @@ def _validate_finding(item: Any, source_map: dict[str, Fragment], known_prohibit
     explanation = item["explanation"].strip()
     if item["kind"] == "loss":
         explanation += " Вывод ограничен выбранными фрагментами: отсутствие функции во всём комплекте не доказано."
+    score = reported_assessment(float(confidence))
     return Finding(
         kind=item["kind"], title=title, explanation=explanation,
-        confidence=float(confidence), sources=[source_map[value] for value in ids],
+        confidence=score.score, sources=[source_map[value] for value in ids], assessment=score,
         recommendation=item["recommendation"].strip(),
     )
 

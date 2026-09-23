@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
 from .models import AnalysisResult, Document, Finding, Fragment, Function, FunctionMatch, MatrixRow, UnitChange
+from .confidence import assess_result
 
 UNKNOWN_OWNER = "Владелец не установлен"
 UNIT_WORDS = r"(?:департамент|отдел|управление|служба|сектор|центр|бюро|блок|комитет)"
@@ -614,11 +615,12 @@ def _find_conflicts(functions: list[Function]) -> list[Finding]:
                     "В обязанностях одного владельца найдены выполнение и контроль сходного процесса. Требуется проверить объект, область и независимость проверки; нарушение не утверждается.",
                     0.65, list(_unique_sources([execute.source, check.source, *execute.context_sources, *check.context_sources])),
                     "Проверить независимость контроля; при подтверждении совмещения разделить роли или зафиксировать компенсирующий контроль.",
+                    function_ids=[execute.id, check.id],
                 ))
     return findings
 
 
-def analyze_documents(before_docs: list[Document], after_docs: list[Document]) -> AnalysisResult:
+def analyze_documents(before_docs: list[Document], after_docs: list[Document], *, after_complete: bool = False) -> AnalysisResult:
     before_units, before_functions = extract_units_and_functions(before_docs)
     after_units, after_functions = extract_units_and_functions(after_docs)
     warnings = [w for d in before_docs + after_docs for w in d.warnings]
@@ -652,7 +654,7 @@ def analyze_documents(before_docs: list[Document], after_docs: list[Document]) -
                 matches.append(FunctionMatch(old, new, _function_similarity(old, new) if new else 0.0, status))
         else:
             matches.extend(FunctionMatch(None, new, 0.0, status) for new in row.after)
-    return AnalysisResult(
+    result = AnalysisResult(
         _match_units_with_profiles(before_units, after_units, before_functions, after_functions), matches, findings, warnings,
         rows, list(_unique_sources([f for d in before_docs + after_docs for f in d.fragments])),
         list(dict.fromkeys([*before_units, *(f.unit for f in before_functions if f.owner_known)])),
@@ -662,3 +664,6 @@ def analyze_documents(before_docs: list[Document], after_docs: list[Document]) -
          "functions_before": len(before_functions), "functions_after": len(after_functions),
          "unknown_owners_before": unknown_before, "unknown_owners_after": unknown_after, "matrix_rows": len(rows)},
     )
+    assess_result(result, before_docs, after_docs, after_complete=after_complete,
+                  similarity=_similarity, tokens=_tokens, actions=_action_stems)
+    return result

@@ -8,6 +8,9 @@ import streamlit as st
 def apply_theme():
     # This CSS approximates glass on the web; it is not Apple's native material.
     st.html(Path(__file__).with_name("static") / "workspace.css")
+    # Native dialogs/popovers are portaled outside .stApp. Mirror only our theme
+    # tokens so they follow Streamlit's manual theme as well as the system theme.
+    st.html(Path(__file__).with_name("static") / "theme-bridge.html", unsafe_allow_javascript=True)
 
 
 def sidebar_brand():
@@ -16,6 +19,9 @@ def sidebar_brand():
 
 
 def workspace_header():
+    if st.session_state.get("result") is not None:
+        st.markdown('<header class="qa-heading qa-report-heading"><h1>Сравнение редакций</h1></header>', unsafe_allow_html=True)
+        return
     st.markdown('''<header class="qa-heading">
 <div class="qa-eyebrow">Анализ структуры и функций</div>
 <h1>Карта ответственности</h1>
@@ -27,14 +33,13 @@ def result_navigation():
     """Native in-page links keep the completed report and filter state intact."""
     with st.container(key="result_navigation"):
         st.markdown('''<nav class="qa-result-nav" aria-label="Разделы результата анализа">
-<span class="qa-nav-label">Результат анализа</span>
 <div class="qa-nav-links">
 <a href="#overview" target="_self">Обзор</a>
-<a href="#conclusion" target="_self">Заключение</a>
+<a href="#conclusion" target="_self">Что проверить</a>
 <a href="#semantic" target="_self">ИИ-сравнение</a>
-<a href="#structure" target="_self">Структура</a>
 <a href="#matrix" target="_self">Матрица функций</a>
-<a href="#sources" target="_self">Источники и охват</a>
+<a href="#structure" target="_self">Структура</a>
+<a href="#sources" target="_self">Источники</a>
 <a href="#export" target="_self">Экспорт <span aria-hidden="true">↓</span></a>
 </div></nav>''', unsafe_allow_html=True)
 
@@ -53,13 +58,13 @@ def welcome():
 </section>''', unsafe_allow_html=True)
         action, detail = st.columns([1, 1.25], gap="medium")
         with action:
-            requested = st.button("Запустить контрольный пример", key="welcome_demo", type="primary", width="stretch", icon=":material/play_arrow:")
+            requested = st.button("тест", key="welcome_demo", type="primary", width="stretch", icon=":material/play_arrow:")
         with detail:
             st.caption("Синтетические документы. Без файлов и API-ключа.")
     st.markdown('''<section class="qa-workflow" aria-label="Как работает сравнение">
 <div><span class="qa-step-number" aria-hidden="true">1</span><h3>Загрузите две редакции</h3><p>Добавьте файлы в комплекты «До изменений» и «После изменений» в боковой панели.</p></div>
 <div><span class="qa-step-number" aria-hidden="true">2</span><h3>Сверьте назначения</h3><p>Проследите передачу функций в матрице. Откройте строку, чтобы увидеть исходные цитаты.</p></div>
-<div><span class="qa-step-number" aria-hidden="true">3</span><h3>Передайте заключение</h3><p>Проверьте индикаторы рисков и скачайте полный отчёт с источниками в Markdown или JSON.</p></div>
+<div><span class="qa-step-number" aria-hidden="true">3</span><h3>Передайте заключение</h3><p>Проверьте индикаторы рисков и скачайте отчёты с источниками в PDF, Excel, Markdown или JSON.</p></div>
 </section>
 <div class="qa-footnote"><span aria-hidden="true">◈</span> Основной анализ выполняется локально. Дополнительная ИИ-проверка включается отдельно.</div>''', unsafe_allow_html=True)
     return requested

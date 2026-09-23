@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from collections import Counter
 
-from .models import AnalysisResult, Fragment
+from .models import AnalysisResult, ConfidenceAssessment, Fragment
+from .confidence import LEVELS, confidence_counts, metric_lines
 
 
 STATUS_LABELS = {
@@ -72,6 +73,10 @@ def collect_sources(result: AnalysisResult) -> list[Fragment]:
         functions.extend(function for function in (match.before, match.after) if function)
     for row in result.matrix_rows:
         functions.extend([*row.before, *row.after])
+    for item in [*result.findings, *result.matrix_rows]:
+        if item.assessment:
+            for source in item.assessment.evidence:
+                sources[source.id] = source
     for function in functions:
         for source in (function.source, *function.context_sources):
             sources[source.id] = source
@@ -83,6 +88,54 @@ def _md(value: str) -> str:
     for char in ("\\", "`", "*", "_", "[", "]", "#", "|", "!"):
         value = value.replace(char, "\\" + char)
     return value
+
+
+def ai_review_overview(result: AnalysisResult) -> list[tuple[str, str | int]]:
+    """Shared, explicit AI coverage and limitations for offline exports."""
+    review = result.ai_review or {}
+    rows = [("ИИ · статус", AI_STATUS_LABELS.get(review.get("status", "skipped"), review.get("status", "skipped"))),
+            ("ИИ · границы выводов", "Выбранные примеры, не исчерпывающий перечень изменений. Матрица рассчитана локально. Проверка цитат и ИИ-перепроверка не заменяют проверку сотрудником.")]
+    if not review:
+        return rows
+    rows.extend([
+        ("ИИ · модель", review.get("model", "Не указана")),
+        ("ИИ · сопоставлений / дополнительных рисков", f"{len(review.get('comparisons', []))} / {review.get('accepted_findings', 0)}"),
+        ("ИИ · фрагментов в пакетах с проверенным ответом", f"{review.get('covered_sources', 0)} / {review.get('total_sources', 0)}"),
+        ("ИИ · фрагментов передано", review.get("sent_sources", review.get("covered_sources", 0))),
+        ("ИИ · успешных пакетов", f"{review.get('completed_batches', 0)} / {review.get('total_batches', 0)}"),
+        ("ИИ · запросов", review.get("requests_made", 0)),
+        ("ИИ · отклонено при проверке данных и цитат", review.get("rejected_items", 0)),
+        ("ИИ · дополнительная проверка смысла", AI_STATUS_LABELS.get(review.get("verification_status", "skipped"), review.get("verification_status", "skipped"))),
+        ("ИИ · отклонено при проверке смысла", review.get("verification_rejected", 0)),
+    ])
+    if review.get("summary"):
+        rows.append(("ИИ · заключение", review["summary"]))
+    if review.get("error"):
+        rows.append(("ИИ · ограничение", review["error"]))
+    if review.get("usage_available"):
+        rows.append(("ИИ · сообщено токенов вход / выход", f"{review.get('input_tokens', 0)} / {review.get('output_tokens', 0)}"))
+        rows.append(("ИИ · полнота данных о расходе", "Получены для всех запросов" if review.get("usage_complete") else
+                     "Неполные данные: суммы относятся только к запросам, для которых API вернул расход"))
+    else:
+        rows.append(("ИИ · расход токенов", "Недоступен: API не вернул расход"))
+    rows.extend(("ИИ · причина отклонения данных", f"{reason}: {count}") for reason, count in review.get("rejected_reasons", {}).items())
+    rows.extend(("ИИ · причина отклонения смысла", reason) for reason in review.get("verification_reasons", []))
+    return rows
+
+
+def _confidence_report(value: ConfidenceAssessment | None) -> list[str]:
+    if value is None:
+        return []
+    lines = [f"Уверенность алгоритма: {value.score:.0%} · {LEVELS[value.level]}", "",
+             _md(value.priority), "", f"Метод: {_md(value.method)}", ""]
+    lines.extend(f"- ✓ {_md(reason)}" for reason in value.reasons)
+    lines.extend(f"- ⚠ {_md(limit)}" for limit in value.limitations)
+    lines.append("")
+    lines.extend(f"- {_md(line)}" for line in metric_lines(value))
+    if value.evidence:
+        lines.extend(["", "Источники для проверки оценки (не доказательство соответствия): " +
+                      ", ".join(_md(source.id) for source in value.evidence)])
+    return lines + [""]
 
 
 def markdown_report(result: AnalysisResult, *, is_demo: bool = False) -> str:
@@ -145,12 +198,19 @@ def markdown_report(result: AnalysisResult, *, is_demo: bool = False) -> str:
             lines.extend("> " + _md(line) for line in item.get("quote", "").splitlines())
             lines.append("")
     lines.extend(["## Аналитическое заключение", ""])
+    lines.extend(["Уверенность — эвристическая оценка, не математическая вероятность и не тяжесть последствий. "
+                  "90–99% — очень высокая; 70–89% — высокая; 40–69% — требует проверки; 0–39% — слабый сигнал. "
+                  "Автоматический анализ не выдаёт 100% и не подтверждает нарушение. Все слабые сигналы включены в этот отчёт.", ""])
+    for kind, levels in confidence_counts(result.findings).items():
+        lines.append(f"- {FINDING_LABELS[kind]}: " + "; ".join(f"{label} — {levels[key]}" for key, label in LEVELS.items()))
+    lines.append("")
     if not result.findings:
         lines.extend(["Индикаторы рисков не найдены. Это не подтверждение отсутствия рисков.", ""])
     for number, finding in enumerate(result.findings, 1):
         lines.extend([f"### {number}. {_md(FINDING_LABELS.get(finding.kind, finding.kind))}: {_md(finding.title)}", "",
                       _md(finding.explanation), "", f"Рекомендация: {_md(finding.recommendation)}", "",
                       "Источники: " + ", ".join(_md(source.id) for source in finding.sources), ""])
+        lines.extend(_confidence_report(finding.assessment))
     lines.extend(["## Изменения структуры", ""])
     for change in result.unit_changes:
         lines.append(f"- **{_md(STATUS_LABELS.get(change.status, change.status))}**: {_md(change.before or '—')} → {_md(change.after or '—')}. Источники: " + ", ".join(_md(source.id) for source in change.sources))
@@ -158,6 +218,7 @@ def markdown_report(result: AnalysisResult, *, is_demo: bool = False) -> str:
     for number, row in enumerate(result.matrix_rows, 1):
         lines.extend([f"### {number}. {_md(row.label)}", "",
                       f"{_md(NORM_LABELS.get(row.norm_type, row.norm_type))} · {_md(STATUS_LABELS.get(row.status, row.status))}", ""])
+        lines.extend(_confidence_report(row.assessment))
         if row.candidate_overlap:
             lines.extend(["Проверить пересечение областей ответственности нескольких владельцев.", ""])
         for note in row.notes:

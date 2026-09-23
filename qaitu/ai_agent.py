@@ -572,7 +572,14 @@ def run_comparison_agent(
                 comparisons_approved = _approved_indices(verified.get("approved_comparisons"), len(candidates))
                 findings_approved = _approved_indices(verified.get("approved_findings"), len(candidate_findings))
                 report["comparisons"] = [candidates[index] for index in comparisons_approved]
-                base_result.findings.extend(candidate_findings[index] for index in findings_approved)
+                for approved_index in findings_approved:
+                    finding = candidate_findings[approved_index]
+                    if finding.assessment:
+                        # Verification checks the claim; it does not calibrate
+                        # the confidence number originally supplied by the model.
+                        finding.assessment.metrics["semantic_verifier_completed"] = True
+                        finding.assessment.reasons.append("Кандидат прошёл дополнительную ИИ-проверку смысла по источникам и контексту.")
+                    base_result.findings.append(finding)
                 report["accepted_findings"] = len(findings_approved)
                 report["verification_rejected"] = total_candidates - len(comparisons_approved) - len(findings_approved)
                 reasons = verified.get("reasons", [])

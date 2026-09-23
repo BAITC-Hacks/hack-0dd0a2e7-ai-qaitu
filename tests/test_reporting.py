@@ -1,6 +1,7 @@
 import unittest
 
-from qaitu.models import AnalysisResult, Fragment, Function, FunctionMatch, MatrixRow
+from qaitu.confidence import assessment
+from qaitu.models import AnalysisResult, Finding, Fragment, Function, FunctionMatch, MatrixRow
 from qaitu.reporting import collect_sources, compact_unit_labels, markdown_report, ordered_matrix_rows
 
 
@@ -42,6 +43,9 @@ class ReportingTests(unittest.TestCase):
         self.assertEqual(labels["Департамент операционного аудита"], "ДОА")
 
     def test_ai_report_includes_grounded_changes_and_honest_partial_coverage(self):
+        score = assessment(.7)
+        self.result.findings = [Finding("loss", "Кандидат локального анализа", "Обоснование", .7, [self.old], assessment=score)]
+        self.result.analysis_context = {"after_complete_user_declared": True}
         self.result.ai_review = {"status": "partial", "model": "test-model", "summary": "Проверен один пакет.", "covered_sources": 2, "total_sources": 3,
             "completed_batches": 1, "total_batches": 2, "usage_available": False, "input_tokens": 0, "output_tokens": 0,
             "comparisons": [{"kind": "moved", "title": "Отчёт передан", "explanation": "Ответственный изменён.", "before_source_ids": [self.old.id], "after_source_ids": [self.new.id],
@@ -54,6 +58,19 @@ class ReportingTests(unittest.TestCase):
         self.assertIn("&lt;script&gt;", report)
         self.assertIn("Данные о токенах недоступны", report)
         self.assertNotIn("Входных токенов: 0", report)
+        self.assertIn("## Аналитическое заключение", report)
+        self.assertIn("Уверенность алгоритма: 70%", report)
+        self.assertIn("local-heuristic-v1", report)
+
+    def test_model_extensions_preserve_positional_arguments(self):
+        review = {"status": "partial"}
+        result = AnalysisResult([], [], [], [], [], [], [], [], {}, review)
+        self.assertIs(result.ai_review, review)
+        self.assertEqual(result.analysis_context, {})
+        score = assessment(.5)
+        finding = Finding("loss", "title", "explanation", .5, [], "recommendation", "row-id", score)
+        self.assertIs(finding.assessment, score)
+        self.assertEqual(finding.function_ids, [])
 
 
 if __name__ == "__main__":

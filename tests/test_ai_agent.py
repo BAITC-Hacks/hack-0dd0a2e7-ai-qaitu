@@ -354,6 +354,20 @@ class SemanticAgentTests(unittest.TestCase):
         self.assertTrue(report["usage_complete"])
         self.assertLessEqual(self.verifier.call_args.kwargs["timeout"], 90)
 
+    def test_verified_risk_keeps_model_self_assessment_and_local_context(self):
+        self.result.analysis_context = {"after_complete_user_declared": True}
+        risk = self.risk()
+        risk["confidence"] = 1.0
+        self.run_agent(response({"comparisons": [], "findings": [risk]}))
+        finding = self.result.findings[0]
+        self.assertEqual(finding.confidence, .89)
+        self.assertEqual(finding.assessment.method, "llm-self-report")
+        self.assertEqual(finding.assessment.metrics["reported_score"], 1.0)
+        self.assertTrue(finding.assessment.metrics["semantic_verifier_completed"])
+        self.assertTrue(finding.assessment.limitations)
+        self.assertTrue(self.result.analysis_context["after_complete_user_declared"])
+        self.assertEqual(finding.function_ids, [])
+
     def test_verification_budget_exhaustion_drops_unverified_candidates(self):
         with patch.object(ai_agent.time, "monotonic", side_effect=[100, 100, 281]):
             self.run_agent(response({"comparisons": [self.comparison()], "findings": []}))
