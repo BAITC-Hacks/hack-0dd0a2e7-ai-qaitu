@@ -9,6 +9,7 @@ from qaitu.analyzer import analyze_documents
 from qaitu.ai_reviewer import review_with_llm
 from qaitu.demo import demo_documents
 from qaitu.extractors import extract_document
+from qaitu.report import conclusion
 
 
 st.set_page_config(page_title="QAITU — анализ реорганизации", page_icon="🔎", layout="wide")
@@ -52,6 +53,7 @@ if run:
             with st.spinner("Агент выполняет смысловую перепроверку выводов…"):
                 result.findings.extend(review_with_llm(before_docs, after_docs, result, api_key, model))
         st.session_state["result"] = result
+        st.session_state["document_counts"] = (len(before_docs), len(after_docs))
         st.session_state["mode"] = "uploaded"
     except Exception as exc:
         st.exception(exc)
@@ -66,6 +68,7 @@ elif demo:
         with st.spinner("Агент выполняет смысловую перепроверку выводов…"):
             result.findings.extend(review_with_llm(before_docs, after_docs, result, api_key, model))
     st.session_state["result"] = result
+    st.session_state["document_counts"] = (len(before_docs), len(after_docs))
     st.session_state["mode"] = "demo"
 
 result = st.session_state.get("result")
@@ -89,6 +92,14 @@ losses = sum(f.kind == "loss" for f in result.findings)
 duplicates = sum(f.kind == "duplicate" for f in result.findings)
 conflicts = sum(f.kind == "conflict" for f in result.findings)
 created = sum(c.status == "created" for c in result.unit_changes)
+before_units_count = sum(c.before is not None for c in result.unit_changes)
+after_units_count = sum(c.after is not None for c in result.unit_changes)
+before_functions_count = sum(m.before is not None for m in result.function_matches)
+after_functions_count = sum(m.after is not None for m in result.function_matches)
+st.caption(
+    f"Распознано: подразделений до — {before_units_count}, после — {after_units_count}; "
+    f"функций до — {before_functions_count}, после — {after_functions_count}."
+)
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Новые подразделения", created)
 c2.metric("Возможные потери", losses)
@@ -111,6 +122,8 @@ status_labels = {
 
 with tab_summary:
     st.subheader("Аналитическое заключение")
+    before_count, after_count = st.session_state["document_counts"]
+    st.write(conclusion(result, before_count, after_count))
     if not result.findings:
         st.success("По заданным порогам существенных отклонений не найдено.")
     for index, finding in enumerate(result.findings, 1):

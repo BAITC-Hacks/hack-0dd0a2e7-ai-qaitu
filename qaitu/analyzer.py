@@ -15,6 +15,8 @@ FUNCTION_MARKERS = re.compile(
     r"подготавливает|выполняет|координирует|расследует|консультирует)\b",
     re.IGNORECASE,
 )
+SECTION_RE = re.compile(r"^\s*(\d+)\.(\d+)(?:\.(\d+))?\.\s*(.*)")
+ORG_ITEM_RE = re.compile(r"^\s*[а-яa-z]\.?\s+", re.I)
 AUDIT_MARKERS = {"аудит", "провер", "контрол", "оценк", "монитор"}
 EXECUTION_MARKERS = {"выполн", "осуществл", "разработ", "веден", "ведение", "подготов", "реализ"}
 STOPWORDS = {
@@ -54,12 +56,73 @@ def _extract_unit(fragment: Fragment) -> str | None:
     return _clean_unit(unit)
 
 
+def _structured_owner(section: str, heading: str, units: dict[str, list[Fragment]]) -> str:
+    if section == "3" and "ДИТААД" in heading and "ДОА" in heading:
+        return "ДИТААД и ДОА (совместные обязанности)"
+    if section == "3":
+        return "Директор направления внутреннего аудита"
+    normalized = heading.lower().replace("департамента", "департамент")
+    for unit in units:
+        if _similarity(unit, normalized) >= 0.55:
+            return unit
+    return heading.strip(" :")
+
+
+def _extract_structured_document(document: Document) -> tuple[dict[str, list[Fragment]], list[Function]] | None:
+    """Parse provisions with an explicit 3.4 structure and numbered 2.4/5.x duties."""
+    if not any(re.match(r"^\s*3\.4\.\s+.*(?:состоит|структурн)", f.text, re.I) for f in document.fragments):
+        return None
+
+    units: dict[str, list[Fragment]] = defaultdict(list)
+    in_structure = False
+    for fragment in document.fragments:
+        match = SECTION_RE.match(fragment.text)
+        if match and match.group(1) == "3" and match.group(2) == "4" and match.group(3) is None:
+            in_structure = True
+            continue
+        if in_structure and match and match.group(1) == "3" and match.group(2) != "4":
+            in_structure = False
+        if in_structure and ORG_ITEM_RE.match(fragment.text):
+            unit = _extract_unit(fragment)
+            if unit:
+                units[unit].append(fragment)
+
+    functions: list[Function] = []
+    owners: dict[str, str] = {}
+    for fragment in document.fragments:
+        match = SECTION_RE.match(fragment.text)
+        if not match:
+            continue
+        major, section, item, body = match.groups()
+        if major == "5" and item is None and section in {"3", "4", "5"}:
+            owners[section] = _structured_owner(section, body, units)
+        elif major == "5" and item and section in owners and section in {"3", "4", "5"}:
+            if len(_tokens(body)) >= 3 and not body.strip().startswith(";"):
+                functions.append(Function(
+                    f"{document.period}:fn:{len(functions) + 1}", owners[section], body.strip(), fragment,
+                ))
+        elif major == "2" and section == "4" and item and len(_tokens(body)) >= 3:
+            functions.append(Function(
+                f"{document.period}:fn:{len(functions) + 1}", "БВА (общие функции)", body.strip(), fragment,
+            ))
+    return dict(units), functions
+
+
 def extract_units_and_functions(documents: list[Document]) -> tuple[dict[str, list[Fragment]], list[Function]]:
     units: dict[str, list[Fragment]] = defaultdict(list)
     functions: list[Function] = []
     current_unit: str | None = None
     fn_no = 0
     for document in documents:
+        structured = _extract_structured_document(document)
+        if structured is not None:
+            document_units, document_functions = structured
+            for unit, sources in document_units.items():
+                units[unit].extend(sources)
+            for function in document_functions:
+                fn_no += 1
+                functions.append(Function(f"{document.period}:fn:{fn_no}", function.unit, function.text, function.source))
+            continue
         for fragment in document.fragments:
             explicit = _extract_unit(fragment)
             if explicit:
@@ -74,27 +137,60 @@ def extract_units_and_functions(documents: list[Document]) -> tuple[dict[str, li
     return dict(units), functions
 
 
-def _best_match(query: str, candidates: list[str]) -> tuple[str | None, float]:
-    if not candidates:
-        return None, 0.0
-    scored = sorted(((candidate, _similarity(query, candidate)) for candidate in candidates), key=lambda x: x[1], reverse=True)
-    return scored[0]
+def _function_body(function: Function) -> str:
+    marker = FUNCTION_MARKERS.search(function.text)
+    return function.text[marker.start():] if marker else function.text
 
 
-def _match_units(before: dict[str, list[Fragment]], after: dict[str, list[Fragment]]) -> list[UnitChange]:
+def _function_profile_similarity(left: list[Function], right: list[Function]) -> float:
+    if not left or not right:
+        return 0.0
+    left_texts = [_function_body(function) for function in left]
+    right_texts = [_function_body(function) for function in right]
+    left_coverage = sum(max(_similarity(text, other) for other in right_texts) for text in left_texts) / len(left_texts)
+    right_coverage = sum(max(_similarity(text, other) for other in left_texts) for text in right_texts) / len(right_texts)
+    return (left_coverage + right_coverage) / 2
+
+
+def _match_units(
+    before: dict[str, list[Fragment]], after: dict[str, list[Fragment]],
+    before_functions: list[Function], after_functions: list[Function],
+) -> list[UnitChange]:
     result: list[UnitChange] = []
-    unused_after = set(after)
+    old_profiles: dict[str, list[Function]] = defaultdict(list)
+    new_profiles: dict[str, list[Function]] = defaultdict(list)
+    for function in before_functions:
+        old_profiles[function.unit].append(function)
+    for function in after_functions:
+        new_profiles[function.unit].append(function)
+
+    candidates: list[tuple[float, float, float, str, str]] = []
     for old in before:
-        new, score = _best_match(old, list(unused_after))
-        if new is not None and score >= 0.48:
-            old_type = _norm(old).split()[0]
-            new_type = _norm(new).split()[0]
-            status = "preserved" if score >= 0.78 and old_type == new_type else "transformed"
-            result.append(UnitChange(status, old, new, round(score, 2), [before[old][0], after[new][0]]))
-            unused_after.remove(new)
-        else:
+        for new in after:
+            name_score = _similarity(old, new)
+            function_score = _function_profile_similarity(old_profiles[old], new_profiles[new])
+            score = 0.4 * name_score + 0.6 * function_score if function_score else name_score
+            # A complete rename needs several corroborating functions, not one generic sentence.
+            enough_evidence = name_score >= 0.25 or (
+                min(len(old_profiles[old]), len(new_profiles[new])) >= 2 and function_score >= 0.75
+            )
+            if score >= 0.48 and enough_evidence:
+                candidates.append((score, name_score, function_score, old, new))
+
+    used_before: set[str] = set()
+    used_after: set[str] = set()
+    for score, name_score, _, old, new in sorted(candidates, key=lambda item: (-item[0], item[3], item[4])):
+        if old in used_before or new in used_after:
+            continue
+        same_type = _norm(old).split()[0] == _norm(new).split()[0]
+        status = "preserved" if name_score >= 0.78 and same_type else "transformed"
+        result.append(UnitChange(status, old, new, round(score, 2), [before[old][0], after[new][0]]))
+        used_before.add(old)
+        used_after.add(new)
+    for old in before:
+        if old not in used_before:
             result.append(UnitChange("removed", old, None, 1.0, [before[old][0]]))
-    for new in sorted(unused_after):
+    for new in sorted(set(after) - used_after):
         result.append(UnitChange("created", None, new, 1.0, [after[new][0]]))
     return result
 
@@ -167,7 +263,7 @@ def _find_conflicts(functions: list[Function]) -> list[Finding]:
 def analyze_documents(before_docs: list[Document], after_docs: list[Document]) -> AnalysisResult:
     before_units, before_functions = extract_units_and_functions(before_docs)
     after_units, after_functions = extract_units_and_functions(after_docs)
-    changes = _match_units(before_units, after_units)
+    changes = _match_units(before_units, after_units, before_functions, after_functions)
     matches = _match_functions(before_functions, after_functions)
     findings: list[Finding] = []
     for match in matches:

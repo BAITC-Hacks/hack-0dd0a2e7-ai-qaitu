@@ -18,7 +18,11 @@ def _clean(text: object) -> str:
 
 def _fragment(name: str, period: Period, locator: str, text: str, n: int) -> Fragment:
     document_key = hashlib.sha1(name.encode("utf-8")).hexdigest()[:8]
-    return Fragment(f"{period}:{document_key}:{n}", name, _clean(text), locator, period)
+    cleaned = _clean(text)
+    clause = re.match(r"^(\d+(?:\.\d+)+)\.", cleaned)
+    if clause:
+        locator = f"{locator}, п. {clause.group(1)}"
+    return Fragment(f"{period}:{document_key}:{n}", name, cleaned, locator, period)
 
 
 def extract_document(file: BinaryIO, name: str, period: Period) -> Document:
