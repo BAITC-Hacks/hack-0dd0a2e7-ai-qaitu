@@ -13,7 +13,7 @@ from .models import Finding, Fragment
 
 MAX_PAYLOAD_CHARS = 160_000
 MAX_CLAIMS = 45
-MAX_OUTPUT_TOKENS = 6_000
+MAX_OUTPUT_TOKENS = 8_000
 ERROR_MESSAGE = "Semantic verification could not be completed safely."
 
 SYSTEM_PROMPT = """Ты — независимый строгий проверяющий смысловых выводов о реорганизации.
@@ -185,7 +185,7 @@ def verify_claims(client, model: str, comparisons: list[dict], findings: list[Fi
             input=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": _encode(payload)}],
             text={"format": {"type": "json_schema", "name": "semantic_claim_verification", "strict": True, "schema": schema}},
             store=False, max_output_tokens=MAX_OUTPUT_TOKENS, timeout=timeout,
-            **({"reasoning": {"effort": "high"}} if model.startswith("gpt-5.4-mini") else {}))
+            **({"reasoning": {"effort": "medium"}} if model.startswith("gpt-5.4-mini") else {}))
         api_usage = getattr(response, "usage", None)
         input_tokens, output_tokens = getattr(api_usage, "input_tokens", None), getattr(api_usage, "output_tokens", None)
         if type(input_tokens) is int and type(output_tokens) is int and min(input_tokens, output_tokens) >= 0:
