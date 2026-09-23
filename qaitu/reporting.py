@@ -19,7 +19,7 @@ ROLE_LABELS = {
     "audit": "контроль", "review": "проверка", "unknown": "роль не определена",
 }
 FINDING_LABELS = {"loss": "Возможная потеря", "duplicate": "Возможное дублирование", "conflict": "Потенциальный конфликт"}
-AI_STATUS_LABELS = {"completed": "Завершено", "partial": "Частично", "failed": "Не завершено", "skipped": "Не запускалось"}
+AI_STATUS_LABELS = {"completed": "Завершено", "partial": "Частично", "failed": "Не завершено", "skipped": "Не запускалось", "not_needed": "Нет кандидатов для проверки", "running": "Выполняется", "budget_exhausted": "Истёк лимит времени"}
 AI_COMPARISON_LABELS = {"retained": "Сохранено по смыслу", "changed": "Изменено", "moved": "Передано", "added": "Добавлено", "possibly_lost": "Возможная потеря"}
 COVERAGE_LABELS = {
     "documents_before": "Документов до", "documents_after": "Документов после",

@@ -29,6 +29,10 @@ SYSTEM_PROMPT = """Ты — независимый строгий проверя
 2. Если цитаты до/после одинаковы, нельзя утверждать новый акцент, усиление или изменение
 этой нормы. Отличие соседнего пункта не означает изменение неизменного пункта. Сохранение
 периодичности в общем разделе исключает заявление, что она полностью утрачена.
+Заголовок проверяй отдельно от объяснения: достоверное изменение отчётности не подтверждает
+заголовок об усилении мониторинга, если пункт о мониторинге не менялся. Если собственная
+причина проверки указывает, что заявленная изменённой норма сохранена, verdict должен
+быть reject, даже если рядом есть другое реальное изменение.
 3. Исчезновение названия должности/заголовка или замена одного руководителя несколькими
 не доказывают потери функции. Для loss/possibly_lost нужна конкретная прежняя обязанность
 или право и рассмотренный новый контекст, а не только заголовки должностей.
@@ -181,7 +185,7 @@ def verify_claims(client, model: str, comparisons: list[dict], findings: list[Fi
             input=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": _encode(payload)}],
             text={"format": {"type": "json_schema", "name": "semantic_claim_verification", "strict": True, "schema": schema}},
             store=False, max_output_tokens=MAX_OUTPUT_TOKENS, timeout=timeout,
-            **({"reasoning": {"effort": "low"}} if model.startswith("gpt-5.4-mini") else {}))
+            **({"reasoning": {"effort": "high"}} if model.startswith("gpt-5.4-mini") else {}))
         api_usage = getattr(response, "usage", None)
         input_tokens, output_tokens = getattr(api_usage, "input_tokens", None), getattr(api_usage, "output_tokens", None)
         if type(input_tokens) is int and type(output_tokens) is int and min(input_tokens, output_tokens) >= 0:

@@ -54,7 +54,7 @@ class SemanticVerifierTests(unittest.TestCase):
         self.assertNotIn("comparisons", result)
         request = self.client.responses.create.call_args.kwargs
         self.assertFalse(request["store"])
-        self.assertEqual(request["reasoning"], {"effort": "low"})
+        self.assertEqual(request["reasoning"], {"effort": "high"})
         self.assertEqual(request["timeout"], 30)
         self.assertTrue(request["text"]["format"]["strict"])
         payload = json.loads(request["input"][1]["content"])
