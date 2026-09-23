@@ -33,7 +33,7 @@ matrix meanings. Use 24px panel, 16px control, and pill navigation radii.
 The welcome screen explains the upload > compare > inspect workflow with a
 clear hierarchy. It includes an actionable control example and clearly identifies
 synthetic data. After analysis, six native anchor links remain pinned above the
-report: overview, matrix, conclusion, structure, sources, and export. All sections
+report: overview, conclusion, structure, matrix, sources, and export. All sections
 are visible in one report, and navigation preserves filters and analysis state.
 
 The completed workspace expands to 1840px. The matrix has a wider function
