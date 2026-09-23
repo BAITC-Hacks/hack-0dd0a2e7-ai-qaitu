@@ -30,7 +30,7 @@ class InterfaceTests(unittest.TestCase):
             widget(app.button, "Запустить контрольный пример").click().run()
         reviewer.assert_not_called()
         self.assertFalse(app.exception, [error.message for error in app.exception])
-        self.assertTrue(any("КОНТРОЛЬНЫЙ ПРИМЕР" in item.value for item in app.info))
+        self.assertTrue(any("КОНТРОЛЬНЫЙ ПРИМЕР" in item.value for item in app.caption))
         self.assertTrue(any("<table" in item.value for item in app.markdown))
         navigation = next(item.value for item in app.markdown if 'qa-result-nav' in item.value)
         destinations = {header.proto.anchor for header in app.header}
@@ -133,12 +133,47 @@ class InterfaceTests(unittest.TestCase):
         self.assertNotIn("<script>", table)
         self.assertIn("+ И", table)
         self.assertTrue(any("Директор отдела:" in item.value for item in app.text))
+        app.button(key="expand_matrix").click().run()
+        self.assertFalse(app.exception)
+        expanded = [item.value for item in app.markdown if "<table" in item.value][-1]
+        self.assertIn("&lt;script&gt;", expanded)
+        self.assertNotIn("<script>", expanded)
+        app.run()
         widget(app.text_input, "Найти функцию или владельца").set_value("несуществующая функция").run()
         self.assertFalse(app.exception)
         self.assertTrue(any("строки не найдены" in item.value for item in app.info))
         self.assertEqual(len(app.session_state["result"].matrix_rows), 1)
         widget(app.text_input, "Найти функцию или владельца").set_value("").run()
         self.assertFalse(app.exception)
+
+    def test_expanded_matrix_uses_filters_and_keeps_report_state(self):
+        app = self.make_app()
+        widget(app.button, "Запустить контрольный пример").click().run()
+        result = app.session_state["result"]
+        template = result.matrix_rows[0]
+        result.matrix_rows = [replace(template, id=f"row-{i}", label=f"Функция {i}") for i in range(30)]
+        app.run()
+        widget(app.selectbox, "Страница матрицы").set_value(2).run()
+        page_before = widget(app.selectbox, "Страница матрицы").value
+        selection_before = app.session_state["matrix_row_selection"]
+        with patch("qaitu.analyzer.analyze_documents") as analyze, patch("qaitu.ai_reviewer.review_with_llm") as reviewer:
+            app.button(key="expand_matrix").click().run()
+        analyze.assert_not_called()
+        reviewer.assert_not_called()
+        self.assertFalse(app.exception, [error.message for error in app.exception])
+        expanded = [item.value for item in app.markdown if "<table" in item.value][-1]
+        self.assertEqual(expanded.count('<tr class='), 25)
+        self.assertIn("Функция 24", expanded)
+        app.run()
+        self.assertEqual(widget(app.selectbox, "Страница матрицы").value, page_before)
+        self.assertEqual(app.session_state["matrix_row_selection"], selection_before)
+        widget(app.text_input, "Найти функцию или владельца").set_value("Функция 29").run()
+        app.button(key="expand_matrix").click().run()
+        self.assertFalse(app.exception)
+        expanded = [item.value for item in app.markdown if "<table" in item.value][-1]
+        self.assertEqual(expanded.count('<tr class='), 1)
+        self.assertIn("Функция 29", expanded)
+        self.assertEqual(len(app.session_state["result"].matrix_rows), 30)
 
     def test_optional_llm_error_preserves_local_result_without_leaking_error(self):
         app = self.make_app()

@@ -1,0 +1,18 @@
+<script>
+(() => {
+  const app = document.querySelector('.stApp');
+  if (!app) return;
+  const sync = () => {
+    const style = getComputedStyle(app);
+    document.body.style.colorScheme = style.colorScheme;
+    for (const name of ['bg', 'text', 'accent', 'muted', 'line', 'glass', 'solid', 'shadow']) {
+      document.body.style.setProperty(`--qa-${name}`, style.getPropertyValue(`--qa-${name}`));
+    }
+  };
+  const key = Symbol.for('qaitu.themeObserver');
+  window[key]?.disconnect();
+  window[key] = new MutationObserver(sync);
+  window[key].observe(app, { attributes: true, attributeFilter: ['class', 'style'] });
+  sync();
+})();
+</script>
