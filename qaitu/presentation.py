@@ -23,6 +23,21 @@ def workspace_header():
 </header>''', unsafe_allow_html=True)
 
 
+def result_navigation():
+    """Native in-page links keep the completed report and filter state intact."""
+    with st.container(key="result_navigation"):
+        st.markdown('''<nav class="qa-result-nav" aria-label="Разделы результата анализа">
+<span class="qa-nav-label">Результат анализа</span>
+<div class="qa-nav-links">
+<a href="#overview" target="_self">Обзор</a>
+<a href="#conclusion" target="_self">Заключение</a>
+<a href="#structure" target="_self">Структура</a>
+<a href="#matrix" target="_self">Матрица функций</a>
+<a href="#sources" target="_self">Источники и охват</a>
+<a href="#export" target="_self">Экспорт <span aria-hidden="true">↓</span></a>
+</div></nav>''', unsafe_allow_html=True)
+
+
 def welcome():
     """Return whether the user requested the same local demo as in the sidebar."""
     with st.container(key="welcome"):
