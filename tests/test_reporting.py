@@ -41,6 +41,20 @@ class ReportingTests(unittest.TestCase):
         self.assertEqual(set(labels), set(units))
         self.assertEqual(labels["Департамент операционного аудита"], "ДОА")
 
+    def test_ai_report_includes_grounded_changes_and_honest_partial_coverage(self):
+        self.result.ai_review = {"status": "partial", "model": "test-model", "summary": "Проверен один пакет.", "covered_sources": 2, "total_sources": 3,
+            "completed_batches": 1, "total_batches": 2, "usage_available": False, "input_tokens": 0, "output_tokens": 0,
+            "comparisons": [{"kind": "moved", "title": "Отчёт передан", "explanation": "Ответственный изменён.", "before_source_ids": [self.old.id], "after_source_ids": [self.new.id],
+                "evidence": [{"source_id": self.old.id, "quote": self.old.text}, {"source_id": self.new.id, "quote": self.new.text}], "recommendation": "Уточнить область отчёта."}]}
+        report = markdown_report(self.result)
+        self.assertIn("Статус: Частично", report)
+        self.assertIn("2 / 3", report)
+        self.assertIn("Отчёт передан", report)
+        self.assertIn("old:1", report)
+        self.assertIn("&lt;script&gt;", report)
+        self.assertIn("Данные о токенах недоступны", report)
+        self.assertNotIn("Входных токенов: 0", report)
+
 
 if __name__ == "__main__":
     unittest.main()

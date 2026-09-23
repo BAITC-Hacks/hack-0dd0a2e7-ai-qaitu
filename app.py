@@ -7,11 +7,12 @@ from collections import Counter
 import pandas as pd
 import streamlit as st
 
-from qaitu.ai_reviewer import MAX_BATCHES, MAX_BATCH_CHARS, MAX_REVIEW_SECONDS, review_with_llm
+from qaitu.ai_agent import run_comparison_agent
 from qaitu.analyzer import analyze_documents
+from qaitu.config import load_openai_settings
 from qaitu.demo import demo_documents
 from qaitu.extractors import extract_document
-from qaitu.reporting import COVERAGE_LABELS, FINDING_LABELS, NORM_LABELS, ROLE_LABELS, STATUS_LABELS, collect_sources, compact_unit_labels, markdown_report, ordered_matrix_rows
+from qaitu.reporting import AI_COMPARISON_LABELS, AI_STATUS_LABELS, COVERAGE_LABELS, FINDING_LABELS, NORM_LABELS, ROLE_LABELS, STATUS_LABELS, collect_sources, compact_unit_labels, markdown_report, ordered_matrix_rows
 
 
 st.set_page_config(page_title="QAITU · карта ответственности", page_icon="◈", layout="wide")
@@ -135,6 +136,10 @@ def render_matrix(rows, units, before_units, after_units, selected_id, compact=T
     st.markdown("".join(parts), unsafe_allow_html=True)
 
 
+settings = load_openai_settings()
+AI_MODE = "ИИ + локальное сравнение"
+LOCAL_MODE = "Локальное сравнение"
+
 with st.sidebar:
     st.markdown("### ◈ QAITU")
     st.caption("Рабочее пространство аналитика")
@@ -142,15 +147,24 @@ with st.sidebar:
     st.markdown("**01 / Комплекты документов**")
     before_files = st.file_uploader("До изменений", type=["pdf", "docx", "xlsx", "xlsm"], accept_multiple_files=True)
     after_files = st.file_uploader("После изменений", type=["pdf", "docx", "xlsx", "xlsm"], accept_multiple_files=True)
+    comparison_mode = st.radio("Режим сравнения", [AI_MODE, LOCAL_MODE], index=0 if settings.api_key else 1)
+    use_ai = comparison_mode == AI_MODE
+    if settings.config_error:
+        st.warning(settings.config_error)
+    if use_ai:
+        st.caption("При запуске ИИ-агент отправит в OpenAI извлечённый текст документов «до/после», названия файлов, номера пунктов и контекст источников. Сравнение начинается только по кнопке ниже.")
+    else:
+        st.caption("Текст обрабатывается на этом сервере. Запросов в OpenAI не будет.")
+    with st.expander("Настройки ИИ-агента"):
+        if settings.api_key:
+            st.caption("Серверный ключ настроен. Его значение скрыто; ниже можно указать другой ключ для этого сеанса.")
+        else:
+            st.caption("Серверный ключ не настроен. Для ИИ-режима укажите ключ ниже.")
+        api_key_override = st.text_input("OpenAI API key — заменить для сеанса", value="", type="password", disabled=not use_ai)
+        model = st.text_input("Модель", value=settings.model, disabled=not use_ai)
+        st.caption("Ключ не включается в результаты и отчёты. Большие комплекты могут проверяться частями; фактический охват будет показан отдельно.")
     run = st.button("Сравнить документы", type="primary", width="stretch")
     demo = st.button("Запустить контрольный пример", width="stretch")
-    with st.expander("Дополнительная ИИ-проверка"):
-        use_llm = st.checkbox("Разрешаю отправку фрагментов во внешний API", value=False)
-        st.caption("Опциональная проверка через OpenAI. Включайте только для данных, которые разрешено передавать этому сервису. Основной анализ работает локально.")
-        st.caption(f"До {MAX_BATCHES} пакетов по {MAX_BATCH_CHARS:,} символов; бюджет до {MAX_REVIEW_SECONDS:g} секунд. Проверка может охватить только часть комплекта — ограничения появятся в результате.".replace(",", " "))
-        api_key = st.text_input("OpenAI API key", type="password", disabled=not use_llm)
-        model = st.text_input("Модель", value="gpt-4.1-mini", disabled=not use_llm)
-        st.caption("Ключ не включается в отчёты и не записывается приложением в файлы.")
     st.divider()
     st.caption("PDF с текстом · DOCX · XLSX / XLSM")
     st.caption("Для сканированных PDF нужен предварительный OCR. Выводы требуют проверки сотрудником.")
@@ -178,20 +192,27 @@ if run or demo:
                 period: [{"name": document.name, "metadata": document.metadata, "fragments": len(document.fragments)} for document in documents]
                 for period, documents in (("before", before_docs), ("after", after_docs))
             }
-            st.session_state["llm_status"] = "Локальный анализ · без передачи документов в API"
-            st.session_state["llm_error"] = ""
-            if use_llm:
+            local_result.ai_review = {"status": "skipped", "model": "", "summary": "Выбран локальный режим. ИИ-сравнение не запускалось.", "comparisons": []}
+            if use_ai:
+                api_key = api_key_override.strip() or settings.api_key
                 if not api_key:
-                    st.session_state["llm_error"] = "ИИ-проверка пропущена: не указан API key. Локальные результаты сохранены."
+                    local_result.ai_review = {"status": "skipped", "model": model, "summary": "ИИ-сравнение не запускалось: не указан API key. Локальные результаты сохранены.", "comparisons": [], "error": "Добавьте серверный ключ или ключ для сеанса в настройках ИИ-агента."}
                 else:
-                    try:
-                        with st.spinner("Проверяем кандидаты и ссылки дополнительной моделью…"):
-                            extra_findings = review_with_llm(before_docs, after_docs, local_result, api_key, model)
-                        local_result.findings.extend(extra_findings)
-                        st.session_state["llm_status"] = "Локальный анализ + дополнительная ИИ-проверка кандидатов"
-                    except Exception as exc:
-                        # Provider errors can contain request metadata or secrets.
-                        st.session_state["llm_error"] = f"Дополнительная ИИ-проверка не завершилась ({type(exc).__name__}). Локальные результаты доступны; проверьте настройки API и попробуйте снова."
+                    with st.status("ИИ-агент сравнивает документы…", expanded=True) as agent_status:
+                        progress_bar = st.progress(0.0, text="Подготавливаем фрагменты и контекст")
+
+                        def on_agent_progress(index, total, message):
+                            progress_bar.progress(max(0.0, min(1.0, index / max(1, total))), text=message)
+
+                        try:
+                            run_comparison_agent(before_docs, after_docs, local_result, api_key, model.strip() or settings.model, progress=on_agent_progress)
+                        except Exception as exc:
+                            # Never display provider exception text: it may contain credentials.
+                            previous = getattr(local_result, "ai_review", {})
+                            local_result.ai_review = {**previous, "status": "partial" if previous.get("completed_batches") else "failed", "model": model, "summary": "Локальные результаты сохранены; ИИ-сравнение не завершено полностью.", "error": f"ИИ-сравнение не завершилось ({type(exc).__name__}). Локальные результаты доступны; проверьте настройки API.", "comparisons": previous.get("comparisons", [])}
+                        status = local_result.ai_review.get("status", "failed")
+                        agent_status.update(label="ИИ-сравнение: " + AI_STATUS_LABELS.get(status, status).lower(), state="complete" if status == "completed" else "error", expanded=status != "completed")
+                        progress_bar.empty()
         except Exception as exc:
             st.error(f"Не удалось обработать новый комплект ({type(exc).__name__}). Проверьте формат и наличие извлекаемого текста. Предыдущий результат, если он есть, остаётся ниже.")
 
@@ -220,9 +241,11 @@ if is_demo:
     st.info("КОНТРОЛЬНЫЙ ПРИМЕР · Синтетические документы для проверки сценария. Эти результаты не относятся к вашим положениям.")
 else:
     st.caption("ЗАГРУЖЕННЫЕ ДОКУМЕНТЫ · Результат последнего завершённого сравнения")
-st.caption(st.session_state.get("llm_status", "Локальный анализ"))
-if st.session_state.get("llm_error"):
-    st.warning(st.session_state["llm_error"])
+ai_review = getattr(result, "ai_review", {}) or {}
+ai_status = ai_review.get("status", "skipped")
+st.caption("ИИ-сравнение: " + AI_STATUS_LABELS.get(ai_status, ai_status) + " · локальная матрица сохранена отдельно")
+if ai_status in {"failed", "partial"}:
+    st.warning("ИИ-сравнение выполнено частично." if ai_status == "partial" else "ИИ-сравнение не завершено. Локальные результаты доступны.")
 if result.warnings:
     with st.expander(f"Ограничения обработки · {len(result.warnings)}", expanded=False):
         for warning in result.warnings:
@@ -237,11 +260,81 @@ for column, label, number, explanation in zip(columns,
     column.metric(label, number, help=explanation)
 st.caption("Количество индикаторов, а не подтверждённых нарушений. Числовая уверенность эвристики не является вероятностью правильного вывода.")
 
-tab_matrix, tab_summary, tab_units, tab_sources = st.tabs(["Матрица функций", "Заключение", "Структура", "Источники и охват"])
+tab_ai, tab_matrix, tab_summary, tab_units, tab_sources = st.tabs(["ИИ-сравнение", "Матрица функций", "Заключение", "Структура", "Источники и охват"])
+
+with tab_ai:
+    st.subheader("Смысловое сравнение документов")
+    st.caption("ИИ сопоставляет содержание и объясняет изменения с цитатами. Это отдельный слой анализа: назначения в матрице вычислены локальным алгоритмом и не переписаны моделью.")
+    if ai_status == "completed":
+        st.success("ИИ-сравнение завершено. Все фрагменты каталога вошли в успешно обработанные пакеты.")
+    elif ai_status == "partial":
+        st.warning("Частичный результат: возможны непроверенные источники, отклонённые ответы или ограничения извлечения документов. Причины и охват указаны ниже и в ограничениях обработки.")
+    elif ai_status == "failed":
+        st.error("ИИ-сравнение не завершено. Доступны локальная матрица, источники и локальные рекомендации.")
+    else:
+        st.info(ai_review.get("summary") or "ИИ-сравнение ещё не запускалось. Выберите «ИИ + локальное сравнение» слева и нажмите кнопку сравнения.")
+    if ai_review.get("error"):
+        st.warning(ai_review["error"])
+    if ai_status != "skipped":
+        st.caption("Модель: " + str(ai_review.get("model") or "не указана"))
+        coverage_column, changes_column, batches_column = st.columns(3)
+        coverage_column.metric("Фрагменты в проверенных пакетах", f"{ai_review.get('covered_sources', 0)} / {ai_review.get('total_sources', len(sources))}")
+        changes_column.metric("Смысловые сопоставления", len(ai_review.get("comparisons", [])))
+        batches_column.metric("Пакеты с проверенным ответом", f"{ai_review.get('completed_batches', 0)} / {ai_review.get('total_batches', 0)}")
+        st.caption("Охват фрагментов не означает, что модель нашла каждое изменение. Цитаты и идентификаторы проверены автоматически; смысл выводов требует проверки сотрудником.")
+        if ai_review.get("verification_status"):
+            verification = AI_STATUS_LABELS.get(ai_review["verification_status"], ai_review["verification_status"])
+            st.caption(f"Дополнительная ИИ-проверка обоснованности: {verification.lower()}. Отклонено на этом этапе: {ai_review.get('verification_rejected', 0)}. Это не заменяет проверку сотрудником.")
+        if ai_review.get("summary"):
+            st.write(ai_review["summary"])
+        if ai_review.get("rejected_items"):
+            st.warning(f"Не прошли проверку и исключены из выводов: {ai_review['rejected_items']}.")
+        with st.expander("Охват и использование API"):
+            st.text(f"Запросов: {ai_review.get('requests_made', 0)}\nФрагментов передано в запросах: {ai_review.get('sent_sources', ai_review.get('covered_sources', 0))}\nФрагментов в пакетах с проверенным ответом: {ai_review.get('covered_sources', 0)}")
+            if ai_review.get("usage_available"):
+                st.text(f"API сообщил входных токенов: {ai_review.get('input_tokens', 0)}\nAPI сообщил выходных токенов: {ai_review.get('output_tokens', 0)}")
+                if not ai_review.get("usage_complete", False):
+                    st.caption("Данные о расходе неполные: API вернул использование не для всех запросов. Суммы выше относятся только к полученным данным.")
+            else:
+                st.caption("Данные о токенах недоступны: API не вернул расход.")
+    comparisons = ai_review.get("comparisons", [])
+    if ai_status in {"completed", "partial"} and not comparisons:
+        st.info("Проверенных смысловых сопоставлений не получено. Это не подтверждает отсутствие изменений.")
+    comparison_kinds = st.multiselect("Вид смыслового изменения", list(AI_COMPARISON_LABELS), format_func=lambda key: AI_COMPARISON_LABELS[key], placeholder="Все виды") if comparisons else []
+    source_by_id = {source.id: source for source in sources}
+    for index, comparison in enumerate(comparisons, 1):
+        if comparison_kinds and comparison.get("kind") not in comparison_kinds:
+            continue
+        with st.expander(f"{index:02d} · {AI_COMPARISON_LABELS.get(comparison.get('kind'), 'Сопоставление')} · {comparison.get('title', '')}", expanded=index == 1):
+            st.write(comparison.get("explanation", ""))
+            if comparison.get("recommendation"):
+                st.markdown("**Что проверить**")
+                st.write(comparison["recommendation"])
+            evidence = {}
+            for item in comparison.get("evidence", []):
+                evidence.setdefault(item.get("source_id"), []).append(item.get("quote", ""))
+            for column, period, label in zip(st.columns(2), ("before", "after"), ("ДО", "ПОСЛЕ")):
+                with column:
+                    st.markdown("**" + label + " / основание вывода**")
+                    source_ids = comparison.get(period + "_source_ids", [])
+                    if not source_ids:
+                        st.caption("Прямое соответствие в этой редакции не приведено. Это не доказательство отсутствия функции во всём комплекте.")
+                    for source_id in source_ids:
+                        source = source_by_id.get(source_id)
+                        if source is None:
+                            st.warning("Источник не найден в текущем каталоге: " + str(source_id))
+                            continue
+                        with st.container(border=True):
+                            st.caption(source.document)
+                            st.text(source.locator + " · " + source.id)
+                            for quote in evidence.get(source_id, []):
+                                st.text(quote)
+                            if not evidence.get(source_id):
+                                st.text(source.text)
 
 with tab_matrix:
     st.subheader("Функция × подразделение")
-    st.caption("Одинаковые колонки до / после. Статусы рассчитаны по полному комплекту; фильтры меняют только отображение.")
+    st.caption("Локальный алгоритм · одинаковые колонки до / после. Статусы рассчитаны по полному комплекту; фильтры меняют только отображение. Смысловые выводы ИИ — в отдельной вкладке.")
     pack_columns = st.columns(2)
     for column, period, label in zip(pack_columns, ("before", "after"), ("ДО", "ПОСЛЕ")):
         pack = document_packs.get(period, [])

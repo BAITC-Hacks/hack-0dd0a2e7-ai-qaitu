@@ -19,6 +19,8 @@ ROLE_LABELS = {
     "audit": "контроль", "review": "проверка", "unknown": "роль не определена",
 }
 FINDING_LABELS = {"loss": "Возможная потеря", "duplicate": "Возможное дублирование", "conflict": "Потенциальный конфликт"}
+AI_STATUS_LABELS = {"completed": "Завершено", "partial": "Частично", "failed": "Не завершено", "skipped": "Не запускалось"}
+AI_COMPARISON_LABELS = {"retained": "Сохранено по смыслу", "changed": "Изменено", "moved": "Передано", "added": "Добавлено", "possibly_lost": "Возможная потеря"}
 COVERAGE_LABELS = {
     "documents_before": "Документов до", "documents_after": "Документов после",
     "fragments_before": "Фрагментов до", "fragments_after": "Фрагментов после",
@@ -106,6 +108,42 @@ def markdown_report(result: AnalysisResult, *, is_demo: bool = False) -> str:
         lines.extend(["Показатели извлечения (это не оценка точности):", ""])
         lines.extend(f"- {_md(COVERAGE_LABELS.get(key, key))}: {value}" for key, value in result.coverage.items())
         lines.append("")
+    review = getattr(result, "ai_review", {}) or {}
+    lines.extend(["## Смысловое ИИ-сравнение", "",
+                  f"Статус: {_md(AI_STATUS_LABELS.get(review.get('status', 'skipped'), review.get('status', 'skipped')))}.", "",
+                  "ИИ-выводы — отдельный слой анализа. Матрица назначений рассчитана локальным алгоритмом и не переписана моделью.", ""])
+    if review.get("model"):
+        lines.extend([f"Модель: {_md(review['model'])}.", ""])
+    if review.get("summary"):
+        lines.extend([_md(review["summary"]), ""])
+    if review.get("error"):
+        lines.extend([f"Ограничение: {_md(review['error'])}", ""])
+    if review.get("verification_status"):
+        verification = AI_STATUS_LABELS.get(review["verification_status"], review["verification_status"])
+        lines.extend([f"Дополнительная ИИ-проверка обоснованности: {_md(verification)}. Отклонено: {review.get('verification_rejected', 0)}.", ""])
+    if review and review.get("status") != "skipped":
+        lines.extend([f"Фрагментов в пакетах с проверенным ответом: {review.get('covered_sources', 0)} / {review.get('total_sources', len(sources))}.",
+                      f"Фрагментов передано в запросах: {review.get('sent_sources', review.get('covered_sources', 0))}.",
+                      f"Успешных пакетов: {review.get('completed_batches', 0)} / {review.get('total_batches', 0)}.",
+                      f"Запросов: {review.get('requests_made', 0)}.",
+                      f"Не прошли проверку и исключены из выводов: {review.get('rejected_items', 0)}.", "",
+                      "Охват фрагментов не означает полноту найденных изменений. Цитаты и идентификаторы проверены автоматически; смысл выводов требует проверки сотрудником.", ""])
+        if review.get("usage_available"):
+            lines.extend([f"API сообщил входных токенов: {review.get('input_tokens', 0)}; выходных токенов: {review.get('output_tokens', 0)}.", ""])
+            if not review.get("usage_complete", False):
+                lines.extend(["Данные о расходе неполные: использование получено не для всех запросов. Указанные суммы относятся только к полученным данным.", ""])
+        else:
+            lines.extend(["Данные о токенах недоступны: API не вернул расход.", ""])
+    for number, comparison in enumerate(review.get("comparisons", []), 1):
+        lines.extend([f"### ИИ {number}. {_md(AI_COMPARISON_LABELS.get(comparison.get('kind'), 'Сопоставление'))}: {_md(comparison.get('title', ''))}", "",
+                      _md(comparison.get("explanation", "")), "", f"Рекомендация: {_md(comparison.get('recommendation', ''))}", ""])
+        for period, label in (("before", "До"), ("after", "После")):
+            ids = comparison.get(period + "_source_ids", [])
+            lines.extend([label + ": " + (", ".join(_md(source_id) for source_id in ids) or "прямое соответствие не приведено"), ""])
+        for item in comparison.get("evidence", []):
+            lines.extend([f"Источник: {_md(item.get('source_id', ''))}", ""])
+            lines.extend("> " + _md(line) for line in item.get("quote", "").splitlines())
+            lines.append("")
     lines.extend(["## Аналитическое заключение", ""])
     if not result.findings:
         lines.extend(["Индикаторы рисков не найдены. Это не подтверждение отсутствия рисков.", ""])
