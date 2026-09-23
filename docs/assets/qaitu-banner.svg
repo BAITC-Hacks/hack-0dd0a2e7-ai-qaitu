@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="352" viewBox="0 0 1280 352" role="img" aria-labelledby="title desc">
+  <title id="title">QAITU — карта ответственности</title>
+  <desc id="desc">Сопоставление документов до и после реорганизации. Назначения функций связаны с исходными цитатами.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#102e27"/><stop offset="1" stop-color="#075d4d"/></linearGradient>
+    <linearGradient id="paper" x1="0" x2="0" y1="0" y2="1"><stop stop-color="#f5fff9"/><stop offset="1" stop-color="#dcf4e9"/></linearGradient>
+  </defs>
+  <rect width="1280" height="352" rx="24" fill="url(#bg)"/>
+  <circle cx="1225" cy="14" r="220" fill="#97e8c9" opacity=".06"/>
+  <circle cx="1165" cy="34" r="157" fill="none" stroke="#a5eed3" opacity=".14"/>
+  <path d="M40 40h38v38H40z" fill="none" stroke="#92e6c5" transform="rotate(45 59 59)"/>
+  <path d="M47 47h24v24H47z" fill="#92e6c5" transform="rotate(45 59 59)"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="103" y="72" fill="#f2fff9" font-size="38" font-weight="700" letter-spacing="3">QAITU</text>
+    <text x="44" y="134" fill="#93dcbf" font-size="13" font-weight="700" letter-spacing="2.5">HACKALEM AI · СПЕЦТРЕК КАЗАХТЕЛЕКОМ</text>
+    <text x="42" y="192" fill="#f2fff9" font-size="43" font-weight="700">Карта ответственности.</text>
+    <text x="44" y="229" fill="#c0e0d2" font-size="21">Что изменилось. Кто отвечает. Где источник.</text>
+    <g font-size="13" fill="#d2f5e5">
+      <rect x="44" y="269" width="165" height="34" rx="17" fill="#fff" opacity=".08"/>
+      <text x="63" y="291">DOCX · PDF · EXCEL</text>
+      <rect x="219" y="269" width="180" height="34" rx="17" fill="#fff" opacity=".08"/>
+      <text x="240" y="291">ДО / ПОСЛЕ + ИСТОЧНИКИ</text>
+    </g>
+    <g transform="translate(734 59)">
+      <rect x="0" y="0" width="194" height="222" rx="14" fill="#173e33" stroke="#629781"/>
+      <text x="22" y="35" fill="#aacbbc" font-size="12" font-weight="700" letter-spacing="1.5">ИСХОДНАЯ РЕДАКЦИЯ</text>
+      <text x="22" y="68" fill="#e4f5ec" font-size="24" font-weight="700">До</text>
+      <path d="M22 92h149M22 109h124" stroke="#568673" stroke-width="5" stroke-linecap="round"/>
+      <g fill="#538773"><rect x="22" y="142" width="41" height="25" rx="5"/><rect x="72" y="142" width="41" height="25" rx="5"/><rect x="122" y="142" width="41" height="25" rx="5"/></g>
+      <g fill="#244e3f"><rect x="22" y="175" width="41" height="25" rx="5"/><rect x="72" y="175" width="41" height="25" rx="5"/><rect x="122" y="175" width="41" height="25" rx="5"/></g>
+    </g>
+    <g transform="translate(993 35)">
+      <rect width="235" height="266" rx="16" fill="url(#paper)"/>
+      <text x="22" y="37" fill="#57826f" font-size="12" font-weight="700" letter-spacing="1.5">НОВАЯ РЕДАКЦИЯ</text>
+      <text x="22" y="74" fill="#193d30" font-size="29" font-weight="700">После</text>
+      <path d="M23 100h183M23 117h156" stroke="#aacdbc" stroke-width="5" stroke-linecap="round"/>
+      <g fill="#b6dace"><rect x="22" y="148" width="55" height="29" rx="5"/><rect x="86" y="148" width="55" height="29" rx="5"/><rect x="150" y="148" width="55" height="29" rx="5"/></g>
+      <rect x="22" y="186" width="55" height="29" rx="5" fill="#75bced"/>
+      <rect x="86" y="186" width="55" height="29" rx="5" fill="#f0cf85"/>
+      <rect x="150" y="186" width="55" height="29" rx="5" fill="#ecaaa3"/>
+      <text x="22" y="244" fill="#326950" font-size="12">Каждый вывод связан с цитатой</text>
+    </g>
+    <circle cx="960" cy="167" r="24" fill="#91e6c4"/>
+    <path d="M948 167h23m-9-8 9 8-9 8" fill="none" stroke="#164a37" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
