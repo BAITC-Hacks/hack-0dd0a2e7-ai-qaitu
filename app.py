@@ -1,162 +1,386 @@
 from __future__ import annotations
 
+import html
 import json
+from collections import Counter
 
 import pandas as pd
 import streamlit as st
 
+from qaitu.ai_reviewer import MAX_BATCHES, MAX_BATCH_CHARS, MAX_REVIEW_SECONDS, review_with_llm
 from qaitu.analyzer import analyze_documents
-from qaitu.ai_reviewer import review_with_llm
 from qaitu.demo import demo_documents
 from qaitu.extractors import extract_document
+from qaitu.reporting import COVERAGE_LABELS, FINDING_LABELS, NORM_LABELS, ROLE_LABELS, STATUS_LABELS, collect_sources, compact_unit_labels, markdown_report, ordered_matrix_rows
 
 
-st.set_page_config(page_title="QAITU — анализ реорганизации", page_icon="🔎", layout="wide")
-st.title("QAITU: анализ организационных изменений")
-st.caption("Сравнение структуры и функций «до → после» с прослеживаемостью до источника")
+st.set_page_config(page_title="QAITU · карта ответственности", page_icon="◈", layout="wide")
+st.markdown("""
+<style>
+.block-container{padding-top:3.5rem;padding-bottom:3rem;max-width:1600px}
+h1{font-size:2.1rem!important;letter-spacing:-.045em}h2{font-size:1.45rem!important;letter-spacing:-.025em}h3{font-size:1.12rem!important}
+[data-testid="stMetric"]{border:1px solid #8b9ca733;border-radius:14px;padding:16px 18px}
+[data-testid="stMetricValue"]{font-size:2rem;font-weight:650}[data-testid="stMetricLabel"]{font-size:.85rem}
+.qa-kicker{color:#128976;font-weight:700;letter-spacing:.17em;font-size:.75rem;margin-bottom:.5rem}
+[data-testid="stBaseButton-primary"]{background:#128976;border-color:#128976}
+[data-testid="stButton"] button[kind="primary"]{background-color:#128976!important;border-color:#128976!important}
+[role="tab"][aria-selected="true"]{color:#128976}
+.qa-matrix-wrap{max-height:610px;overflow:auto;border:1px solid #8b9ca744;border-radius:12px;margin:12px 0}
+.qa-matrix{border-collapse:separate;border-spacing:0;width:100%;font:.82rem sans-serif}
+.qa-matrix th,.qa-matrix td{padding:10px;border-right:1px solid #8b9ca722;border-bottom:1px solid #8b9ca733}
+.qa-matrix th{background:var(--secondary-background-color,#f0f2f6);text-align:center;font-weight:600;min-width:96px}
+.qa-matrix th.qa-group{font-size:.78rem;letter-spacing:.12em;color:#128976}
+.qa-matrix.qa-compact th{min-width:42px;max-width:54px;padding:8px 4px;font-size:.7rem}
+.qa-matrix.qa-compact .qa-label{min-width:220px;max-width:260px;font-size:.8rem;padding:10px}
+.qa-matrix td{text-align:center;font-weight:650}
+.qa-matrix .qa-label{position:sticky;left:0;min-width:270px;max-width:350px;text-align:left;z-index:1;background:var(--background-color,#fff);font-weight:400;line-height:1.45}
+.qa-matrix .qa-label small{display:block;color:var(--text-color,#51616f);opacity:.72;margin-top:4px}
+.qa-matrix thead{position:sticky;top:0;z-index:3}.qa-matrix .qa-divider{border-left:3px solid #12897666}
+.qa-present{background:#13a48917;color:#15836d}.qa-change{background:#3285dc22;color:#367cc4}
+.qa-missing{background:#df565422;color:#c84545}.qa-overlap{background:#e1aa3228;color:#967013}
+.qa-unknown{background:#8b9ca726;color:#74828c}.qa-empty{color:#91a0aa}
+.qa-absent{background:repeating-linear-gradient(135deg,#8b9ca70a,#8b9ca70a 4px,#8b9ca719 4px,#8b9ca719 5px);color:#91a0aa}
+.qa-selected .qa-label{box-shadow:inset 4px 0 #128976}
+@media(max-width:600px){.block-container{padding:1rem}.qa-matrix .qa-label{min-width:210px;max-width:230px}}
+</style>
+""", unsafe_allow_html=True)
 
 
-def source_label(source) -> str:
-    return f"{source.document}, {source.locator} — «{source.text}»"
+def render_source(source, *, context=False):
+    st.caption(("Контекст · " if context else "") + ("ДО" if source.period == "before" else "ПОСЛЕ") + " · " + source.document)
+    st.text(f"{source.locator} · {source.id}")
+    st.text(source.text)
+
+
+def render_assignments(functions):
+    if not functions:
+        st.info("Закрепление в обработанных документах не найдено. Это не доказывает, что работу никто не выполняет.")
+        return
+    for function in functions:
+        with st.container(border=True):
+            st.write(function.unit)
+            st.caption(NORM_LABELS.get(function.norm_type, function.norm_type) + " · " + ROLE_LABELS.get(function.role, function.role))
+            if not function.owner_known:
+                st.warning("Владелец требует проверки по контексту.")
+            if function.scope:
+                st.text("Область: " + function.scope)
+            st.text(function.text)
+            with st.expander("Цитата и контекст назначения", expanded=True):
+                render_source(function.source)
+                seen = {function.source.id}
+                for context in function.context_sources:
+                    if context.id not in seen:
+                        st.divider()
+                        render_source(context, context=True)
+                        seen.add(context.id)
+
+
+ROLE_MARKERS = {"execute": "И", "participate": "У", "approve": "Т", "agree": "С", "coordinate": "Ко", "control": "К", "audit": "К", "review": "К", "unknown": "?"}
+
+
+def matrix_cell(row, unit, side, units_present):
+    assignments = row.before if side == "before" else row.after
+    other = row.after if side == "before" else row.before
+    current = [function for function in assignments if function.unit == unit]
+    previous = [function for function in other if function.unit == unit]
+    if current:
+        marker = "/".join(sorted({ROLE_MARKERS.get(function.role, "?") for function in current}))
+        if any(not function.owner_known for function in current):
+            return "qa-unknown", "? " + marker, "Владелец не установлен однозначно"
+        if side == "after" and not previous:
+            return "qa-change", "+ " + marker, "Добавлено назначение"
+        if row.candidate_overlap and side == "after":
+            return "qa-overlap", "⚑ " + marker, "Проверить пересечение ролей и областей"
+        if side == "after" and row.status == "changed":
+            return "qa-change", "~ " + marker, "Формулировка изменилась"
+        return "qa-present", marker, "Закрепление найдено"
+    if side == "after" and previous:
+        if row.status == "unknown":
+            return "qa-unknown", "?", "Данных для вывода недостаточно"
+        if row.status == "lost" and all(function.owner_known for function in row.before):
+            return "qa-missing", "−", "Ответственный не найден в обработанном комплекте"
+        return "qa-change", "−", "Прежнее назначение не найдено; проверьте новых владельцев"
+    if unit not in units_present:
+        return "qa-absent", "×", "В перечне этой редакции не найдено"
+    if row.status == "unknown" and not assignments:
+        return "qa-unknown", "?", "Данных для вывода недостаточно"
+    return "qa-empty", "·", "Прямое закрепление не найдено"
+
+
+def render_matrix(rows, units, before_units, after_units, selected_id, compact=True):
+    # Every document-derived value is escaped before entering this HTML table.
+    esc = lambda value: html.escape(str(value), quote=True)
+    count = len(units)
+    unit_labels = compact_unit_labels(units) if compact else {unit: unit for unit in units}
+    table_class = "qa-matrix qa-compact" if compact else "qa-matrix"
+    parts = [f'<div class="qa-matrix-wrap" role="region" aria-label="Матрица функций до и после" tabindex="0"><table class="{table_class}"><thead>',
+             f'<tr><th rowspan="2" class="qa-label">Функция / назначение</th><th colspan="{count}" class="qa-group">ДО</th><th colspan="{count}" class="qa-group qa-divider">ПОСЛЕ</th></tr><tr>']
+    for side in ("before", "after"):
+        for index, unit in enumerate(units):
+            divider = "qa-divider" if side == "after" and index == 0 else ""
+            parts.append(f'<th class="{divider}" title="{esc(unit)}">{esc(unit_labels[unit])}</th>')
+    parts.append("</tr></thead><tbody>")
+    for row in rows:
+        label = row.label if len(row.label) <= 170 else row.label[:167] + "…"
+        note = STATUS_LABELS.get(row.status, row.status) + (" · ⚑ проверить пересечение" if row.candidate_overlap else "")
+        selected = "qa-selected" if row.id == selected_id else ""
+        parts.append(f'<tr class="{selected}"><td class="qa-label" title="{esc(row.label)}">{esc(label)}<small>{esc(note)}</small></td>')
+        for side, present in (("before", before_units), ("after", after_units)):
+            for index, unit in enumerate(units):
+                css, text, description = matrix_cell(row, unit, side, present)
+                divider = " qa-divider" if side == "after" and index == 0 else ""
+                parts.append(f'<td class="{css}{divider}" title="{esc(description)}">{esc(text)}</td>')
+        parts.append("</tr>")
+    parts.append("</tbody></table></div>")
+    st.markdown("".join(parts), unsafe_allow_html=True)
 
 
 with st.sidebar:
-    st.header("Документы")
-    before_files = st.file_uploader(
-        "До реорганизации", type=["pdf", "docx", "xlsx", "xlsm"], accept_multiple_files=True
-    )
-    after_files = st.file_uploader(
-        "После реорганизации", type=["pdf", "docx", "xlsx", "xlsm"], accept_multiple_files=True
-    )
-    run = st.button("Анализировать", type="primary", width="stretch")
+    st.markdown("### ◈ QAITU")
+    st.caption("Рабочее пространство аналитика")
+    st.divider()
+    st.markdown("**01 / Комплекты документов**")
+    before_files = st.file_uploader("До изменений", type=["pdf", "docx", "xlsx", "xlsm"], accept_multiple_files=True)
+    after_files = st.file_uploader("После изменений", type=["pdf", "docx", "xlsx", "xlsm"], accept_multiple_files=True)
+    run = st.button("Сравнить документы", type="primary", width="stretch")
     demo = st.button("Запустить контрольный пример", width="stretch")
-    with st.expander("Смысловая LLM-проверка (опционально)"):
-        use_llm = st.checkbox("Включить второй этап")
+    with st.expander("Дополнительная ИИ-проверка"):
+        use_llm = st.checkbox("Разрешаю отправку фрагментов во внешний API", value=False)
+        st.caption("Опциональная проверка через OpenAI. Включайте только для данных, которые разрешено передавать этому сервису. Основной анализ работает локально.")
+        st.caption(f"До {MAX_BATCHES} пакетов по {MAX_BATCH_CHARS:,} символов; бюджет до {MAX_REVIEW_SECONDS:g} секунд. Проверка может охватить только часть комплекта — ограничения появятся в результате.".replace(",", " "))
         api_key = st.text_input("OpenAI API key", type="password", disabled=not use_llm)
         model = st.text_input("Модель", value="gpt-4.1-mini", disabled=not use_llm)
-        st.caption("Фрагменты документов будут отправлены во внешний API. Ключ нигде не сохраняется.")
+        st.caption("Ключ не включается в отчёты и не записывается приложением в файлы.")
     st.divider()
-    st.info("Выводы носят рекомендательный характер. Сканированные PDF необходимо предварительно распознать (OCR).")
+    st.caption("PDF с текстом · DOCX · XLSX / XLSM")
+    st.caption("Для сканированных PDF нужен предварительный OCR. Выводы требуют проверки сотрудником.")
 
-if run:
-    if not before_files or not after_files:
-        st.error("Загрузите хотя бы один документ в каждый комплект: «до» и «после».")
-        st.stop()
-    try:
-        before_docs = [extract_document(file, file.name, "before") for file in before_files]
-        after_docs = [extract_document(file, file.name, "after") for file in after_files]
-        result = analyze_documents(before_docs, after_docs)
-        if use_llm:
-            if not api_key:
-                raise ValueError("Для LLM-проверки укажите API key или отключите второй этап.")
-            with st.spinner("Агент выполняет смысловую перепроверку выводов…"):
-                result.findings.extend(review_with_llm(before_docs, after_docs, result, api_key, model))
-        st.session_state["result"] = result
-        st.session_state["mode"] = "uploaded"
-    except Exception as exc:
-        st.exception(exc)
-        st.stop()
-elif demo:
-    before_docs, after_docs = demo_documents()
-    result = analyze_documents(before_docs, after_docs)
-    if use_llm:
-        if not api_key:
-            st.error("Для LLM-проверки укажите API key или отключите второй этап.")
-            st.stop()
-        with st.spinner("Агент выполняет смысловую перепроверку выводов…"):
-            result.findings.extend(review_with_llm(before_docs, after_docs, result, api_key, model))
-    st.session_state["result"] = result
-    st.session_state["mode"] = "demo"
+st.markdown('<div class="qa-kicker">QAITU / ORGANIZATIONAL INTELLIGENCE</div>', unsafe_allow_html=True)
+st.title("Карта ответственности")
+st.caption("Что изменилось в структуре, кому переданы функции и где нужна проверка — с цитатами обеих редакций.")
+
+if run or demo:
+    if run and (not before_files or not after_files):
+        st.error("Добавьте хотя бы один документ в каждый комплект: «до» и «после».")
+    else:
+        try:
+            with st.spinner("Читаем документы и сопоставляем назначения…"):
+                if demo:
+                    before_docs, after_docs = demo_documents()
+                else:
+                    before_docs = [extract_document(file, file.name, "before") for file in before_files]
+                    after_docs = [extract_document(file, file.name, "after") for file in after_files]
+                local_result = analyze_documents(before_docs, after_docs)
+            # Save the completed local stage before the optional network stage.
+            st.session_state["result"] = local_result
+            st.session_state["mode"] = "demo" if demo else "uploaded"
+            st.session_state["document_packs"] = {
+                period: [{"name": document.name, "metadata": document.metadata, "fragments": len(document.fragments)} for document in documents]
+                for period, documents in (("before", before_docs), ("after", after_docs))
+            }
+            st.session_state["llm_status"] = "Локальный анализ · без передачи документов в API"
+            st.session_state["llm_error"] = ""
+            if use_llm:
+                if not api_key:
+                    st.session_state["llm_error"] = "ИИ-проверка пропущена: не указан API key. Локальные результаты сохранены."
+                else:
+                    try:
+                        with st.spinner("Проверяем кандидаты и ссылки дополнительной моделью…"):
+                            extra_findings = review_with_llm(before_docs, after_docs, local_result, api_key, model)
+                        local_result.findings.extend(extra_findings)
+                        st.session_state["llm_status"] = "Локальный анализ + дополнительная ИИ-проверка кандидатов"
+                    except Exception as exc:
+                        # Provider errors can contain request metadata or secrets.
+                        st.session_state["llm_error"] = f"Дополнительная ИИ-проверка не завершилась ({type(exc).__name__}). Локальные результаты доступны; проверьте настройки API и попробуйте снова."
+        except Exception as exc:
+            st.error(f"Не удалось обработать новый комплект ({type(exc).__name__}). Проверьте формат и наличие извлекаемого текста. Предыдущий результат, если он есть, остаётся ниже.")
 
 result = st.session_state.get("result")
 if result is None:
-    st.markdown(
-        """
-        ### Как это работает
-        1. Загрузите положения, оргструктуры или приложения в PDF, Word или Excel.
-        2. Система выделит подразделения и функции и сопоставит версии.
-        3. Каждый риск можно раскрыть до исходной формулировки документа.
-
-        Для быстрой проверки нажмите **«Запустить контрольный пример»**.
-        """
-    )
+    st.divider()
+    left, right = st.columns([1.4, 1], gap="large")
+    with left:
+        st.subheader("От двух комплектов — к проверяемому заключению")
+        st.write("Загрузите положения, оргструктуры, должностные инструкции и приложения слева. Сравнение сохраняет связь между функцией, владельцем и исходным пунктом.")
+        st.info("Начните с контрольного примера: он показывает передачу функций, возможную потерю, пересечение и конфликт ролей на синтетических документах.")
+    with right:
+        with st.container(border=True):
+            st.markdown("**01 · Сопоставить**")
+            st.caption("Подразделения и назначения до / после")
+            st.markdown("**02 · Проверить**")
+            st.caption("Матрица, роли, области ответственности и цитаты")
+            st.markdown("**03 · Передать заключение**")
+            st.caption("Рекомендации и полный отчёт в Markdown / JSON")
     st.stop()
 
-for warning in result.warnings:
-    st.warning(warning)
+sources = collect_sources(result)
+document_packs = st.session_state.get("document_packs", {})
+is_demo = st.session_state.get("mode") == "demo"
+if is_demo:
+    st.info("КОНТРОЛЬНЫЙ ПРИМЕР · Синтетические документы для проверки сценария. Эти результаты не относятся к вашим положениям.")
+else:
+    st.caption("ЗАГРУЖЕННЫЕ ДОКУМЕНТЫ · Результат последнего завершённого сравнения")
+st.caption(st.session_state.get("llm_status", "Локальный анализ"))
+if st.session_state.get("llm_error"):
+    st.warning(st.session_state["llm_error"])
+if result.warnings:
+    with st.expander(f"Ограничения обработки · {len(result.warnings)}", expanded=False):
+        for warning in result.warnings:
+            st.warning(warning)
 
-losses = sum(f.kind == "loss" for f in result.findings)
-duplicates = sum(f.kind == "duplicate" for f in result.findings)
-conflicts = sum(f.kind == "conflict" for f in result.findings)
-created = sum(c.status == "created" for c in result.unit_changes)
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Новые подразделения", created)
-c2.metric("Возможные потери", losses)
-c3.metric("Дублирования", duplicates)
-c4.metric("Конфликты ролей", conflicts)
+counts = Counter(finding.kind for finding in result.findings)
+columns = st.columns(4)
+for column, label, number, explanation in zip(columns,
+        ["Изменения владельцев", "Возможные потери", "Возможные дубли", "Конфликты ролей"],
+        [sum(row.status == "moved" for row in result.matrix_rows), counts["loss"], counts["duplicate"], counts["conflict"]],
+        ["Строки с передачей или изменением набора владельцев", "Закрепление не найдено в обработанном комплекте", "Кандидаты для проверки ролей и области", "Индикаторы исполнения и проверки одного процесса"]):
+    column.metric(label, number, help=explanation)
+st.caption("Количество индикаторов, а не подтверждённых нарушений. Числовая уверенность эвристики не является вероятностью правильного вывода.")
 
-tab_summary, tab_units, tab_functions, tab_sources = st.tabs(
-    ["Заключение", "Подразделения", "Функции", "Источники"]
-)
+tab_matrix, tab_summary, tab_units, tab_sources = st.tabs(["Матрица функций", "Заключение", "Структура", "Источники и охват"])
 
-labels = {
-    "loss": "🔴 Возможная потеря",
-    "duplicate": "🟠 Возможное дублирование",
-    "conflict": "🟡 Потенциальный конфликт",
-}
-status_labels = {
-    "preserved": "Сохранено", "created": "Создано", "removed": "Исключено", "transformed": "Преобразовано",
-    "moved": "Передано", "changed": "Изменено", "lost": "Возможная потеря", "new": "Новая функция",
-}
+with tab_matrix:
+    st.subheader("Функция × подразделение")
+    st.caption("Одинаковые колонки до / после. Статусы рассчитаны по полному комплекту; фильтры меняют только отображение.")
+    pack_columns = st.columns(2)
+    for column, period, label in zip(pack_columns, ("before", "after"), ("ДО", "ПОСЛЕ")):
+        pack = document_packs.get(period, [])
+        actual_names = {source.document for source in sources if source.period == period}
+        if not pack or {item["name"] for item in pack} != actual_names:
+            pack = [{"name": name, "metadata": {}} for name in sorted(actual_names)]
+        if len(pack) == 1:
+            metadata = pack[0]["metadata"]
+            details = [f"Редакция {metadata['edition']}" if metadata.get("edition") else pack[0]["name"]]
+            if metadata.get("protocol"):
+                details.append(f"протокол №{metadata['protocol']}")
+            if metadata.get("date"):
+                details.append(metadata["date"])
+            column.caption(label + " · " + " · ".join(details))
+        else:
+            column.caption(f"{label} · документов: {len(pack)}")
+    f1, f2, f3 = st.columns([1, 1.3, 1.5])
+    with f1:
+        norm_type = st.selectbox("Вид нормы", ["duty", "right"], format_func=lambda key: {"duty": "Обязанности", "right": "Права"}[key])
+    with f2:
+        selected_status = st.multiselect("Статус", list(dict.fromkeys(row.status for row in result.matrix_rows)), format_func=lambda key: STATUS_LABELS.get(key, key), placeholder="Все статусы")
+    with f3:
+        matrix_query = st.text_input("Найти функцию или владельца", placeholder="Например: отчёт, СВК, аудит")
+    rows = ordered_matrix_rows([row for row in result.matrix_rows if row.norm_type == norm_type])
+    if selected_status:
+        rows = [row for row in rows if row.status in selected_status]
+    if matrix_query.strip():
+        query = matrix_query.casefold().strip()
+        rows = [row for row in rows if query in " ".join([row.label, *[function.unit + " " + function.text + " " + function.scope for function in row.before + row.after]]).casefold()]
+    before_units = set(result.units_before) | {function.unit for row in result.matrix_rows for function in row.before}
+    after_units = set(result.units_after) | {function.unit for row in result.matrix_rows for function in row.after}
+    units = sorted(before_units | after_units)
+    st.caption(f"Показано {len(rows)} из {len(result.matrix_rows)} строк · {len(units)} владельцев, включая общие роли · запреты доступны в источниках и контексте")
+    if not rows or not units:
+        st.info("Для выбранных условий строки не найдены. Измените фильтр или проверьте охват извлечения.")
+    else:
+        compact = st.checkbox("Компактные названия колонок", value=True)
+        page_size = 30
+        page_count = (len(rows) + page_size - 1) // page_size
+        page = st.selectbox("Страница матрицы", list(range(page_count)), format_func=lambda value: f"{value + 1} / {page_count}") if page_count > 1 else 0
+        page_rows = rows[page * page_size:(page + 1) * page_size]
+        lookup = {row.id: row for row in page_rows}
+        selected_id = st.selectbox("Выберите строку для просмотра цитат", list(lookup), format_func=lambda key: lookup[key].label[:150], key="matrix_row_selection")
+        render_matrix(page_rows, units, before_units, after_units, selected_id, compact=compact)
+        if compact:
+            with st.expander("Обозначения владельцев · полные названия"):
+                st.caption("П1, П2… — обозначения колонок этой матрицы. Наведите указатель на заголовок, чтобы увидеть полное название.")
+                st.dataframe(pd.DataFrame([{"Колонка": label, "Владелец": unit} for unit, label in compact_unit_labels(units).items()]), hide_index=True, width="stretch")
+        st.caption("И — исполнение · У — участие · С — согласование · Т — утверждение · К — контроль · Ко — координация")
+        st.caption("Синий + / − — изменение назначения · красный − — закрепление не найдено · ⚑ — проверить пересечение · ? — недостаточно данных · × — нет в перечне редакции · · — нет прямого закрепления")
+        row = lookup[selected_id]
+        st.divider()
+        st.subheader("Основание выбранной строки")
+        st.write(row.label)
+        st.caption(NORM_LABELS.get(row.norm_type, row.norm_type) + " · " + STATUS_LABELS.get(row.status, row.status))
+        if row.candidate_overlap:
+            st.warning("Несколько владельцев: сопоставьте роли и область ответственности. Несколько отметок сами по себе не доказывают дубль.")
+        for note in row.notes:
+            st.info(note)
+        before_column, after_column = st.columns(2, gap="large")
+        with before_column:
+            st.markdown("**ДО / исходные назначения**")
+            render_assignments(row.before)
+        with after_column:
+            st.markdown("**ПОСЛЕ / найденные назначения**")
+            render_assignments(row.after)
 
 with tab_summary:
-    st.subheader("Аналитическое заключение")
+    st.subheader("Что проверить в первую очередь")
+    st.caption("Каждый вывод опирается на фрагменты. Подтверждение нарушения и решение о перераспределении остаются за сотрудником.")
     if not result.findings:
-        st.success("По заданным порогам существенных отклонений не найдено.")
+        st.info("Индикаторы рисков не найдены. Проверьте охват и назначения: это не подтверждение отсутствия рисков.")
+    kinds = st.multiselect("Тип проверки", ["loss", "duplicate", "conflict"], format_func=lambda key: FINDING_LABELS[key], placeholder="Все типы")
     for index, finding in enumerate(result.findings, 1):
-        with st.expander(f"{index}. {labels[finding.kind]} — {finding.title}", expanded=True):
+        if kinds and finding.kind not in kinds:
+            continue
+        with st.expander(f"{index:02d} · {FINDING_LABELS.get(finding.kind, finding.kind)} · {finding.title}", expanded=False):
             st.write(finding.explanation)
-            st.progress(finding.confidence, text=f"Уверенность индикатора: {finding.confidence:.0%}")
-            st.markdown("**Подтверждающие фрагменты:**")
+            st.markdown("**Рекомендация**")
+            st.write(finding.recommendation or "Сверить назначение и границы ответственности с владельцем процесса.")
+            st.caption("Пункты, на которых основан индикатор")
             for source in finding.sources:
-                st.markdown(f"- `{source.id}` — {source_label(source)}")
-            st.markdown(f"**Рекомендация:** {finding.recommendation}")
+                render_source(source)
+                st.divider()
 
 with tab_units:
-    rows = [{
-        "Статус": status_labels[item.status],
-        "До": item.before or "—",
-        "После": item.after or "—",
-        "Уверенность": f"{item.confidence:.0%}",
-        "Источники": ", ".join(source.id for source in item.sources),
-    } for item in result.unit_changes]
-    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-
-with tab_functions:
-    rows = [{
-        "Статус": status_labels[item.status],
-        "Подразделение до": item.before.unit if item.before else "—",
-        "Функция до": item.before.text if item.before else "—",
-        "Подразделение после": item.after.unit if item.after else "—",
-        "Функция после": item.after.text if item.after else "—",
-        "Сходство": f"{item.similarity:.0%}",
-    } for item in result.function_matches]
-    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+    st.subheader("Изменения организационной структуры")
+    st.caption("Появление или отсутствие в перечне не доказывает юридическое создание, ликвидацию или преобразование без распорядительного документа.")
+    if result.unit_changes:
+        data = [{"Статус": STATUS_LABELS.get(item.status, item.status), "До": item.before or "—", "После": item.after or "—", "Источники": ", ".join(source.id for source in item.sources)} for item in result.unit_changes]
+        st.dataframe(pd.DataFrame(data), width="stretch", hide_index=True)
+        unit_index = st.selectbox("Проверить изменение по источникам", range(len(result.unit_changes)), format_func=lambda index: (result.unit_changes[index].before or "—") + " → " + (result.unit_changes[index].after or "—"))
+        for source in result.unit_changes[unit_index].sources:
+            with st.container(border=True):
+                render_source(source)
+    else:
+        st.info("Изменения структуры не выделены. Проверьте заголовки и качество извлечённого текста.")
 
 with tab_sources:
-    unique = {}
-    for change in result.unit_changes:
-        for source in change.sources:
-            unique[source.id] = source
-    for finding in result.findings:
-        for source in finding.sources:
-            unique[source.id] = source
-    for source in unique.values():
-        st.markdown(f"**`{source.id}` · {source.document} · {source.locator}**  \n{source.text}")
+    st.subheader("Проверяемость и охват")
+    source_counts = Counter(source.period for source in sources)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Фрагменты до", source_counts["before"])
+    c2.metric("Фрагменты после", source_counts["after"])
+    c3.metric("Строки функций", len(result.matrix_rows))
+    if result.coverage:
+        with st.expander("Показатели извлечения"):
+            st.caption("Это счётчики обработки, не метрика точности и не гарантия полноты всех обязанностей документа.")
+            st.dataframe(pd.DataFrame([{"Показатель": COVERAGE_LABELS.get(key, key), "Количество": value} for key, value in result.coverage.items()]), hide_index=True, width="stretch")
+    with st.expander("Состав комплектов и реквизиты документов"):
+        for period, label in (("before", "ДО"), ("after", "ПОСЛЕ")):
+            for item in document_packs.get(period, []):
+                st.text(label + " · " + item["name"])
+                metadata = item.get("metadata", {})
+                st.caption(" · ".join(f"{key}: {metadata[value]}" for key, value in (("Редакция", "edition"), ("Протокол №", "protocol"), ("Дата", "date")) if metadata.get(value)) or "Реквизиты на титульной странице не распознаны.")
+    st.caption("Каталог включает исходные фрагменты, обе стороны сопоставлений и контекст владельцев. Здесь можно проверить и нормативные запреты.")
+    s1, s2 = st.columns([1, 3])
+    with s1:
+        source_period = st.selectbox("Редакция", ["all", "before", "after"], format_func=lambda key: {"all": "Обе", "before": "До", "after": "После"}[key])
+    with s2:
+        source_query = st.text_input("Поиск по тексту, файлу, пункту или ID", placeholder="Например: 5.3.3 или не имеют права")
+    filtered_sources = [source for source in sources if source_period == "all" or source.period == source_period]
+    if source_query.strip():
+        query = source_query.casefold().strip()
+        filtered_sources = [source for source in filtered_sources if query in " ".join((source.id, source.document, source.locator, source.text)).casefold()]
+    st.caption(f"Найдено фрагментов: {len(filtered_sources)}")
+    if filtered_sources:
+        source_map = {source.id: source for source in filtered_sources}
+        selected_source = st.selectbox("Открыть фрагмент", list(source_map), format_func=lambda key: f"{'До' if source_map[key].period == 'before' else 'После'} · {source_map[key].document} · {source_map[key].locator} · {source_map[key].text[:70]}")
+        with st.container(border=True):
+            render_source(source_map[selected_source])
+    else:
+        st.info("Совпадений нет. Попробуйте другой пункт или ключевое слово.")
 
-st.download_button(
-    "Скачать полный результат JSON",
-    data=json.dumps(result.to_dict(), ensure_ascii=False, indent=2),
-    file_name="qaitu-analysis.json",
-    mime="application/json",
-)
+st.divider()
+download1, download2, note = st.columns([1, 1, 2])
+with download1:
+    st.download_button("↓ Заключение Markdown", markdown_report(result, is_demo=is_demo), file_name="qaitu-conclusion.md", mime="text/markdown", width="stretch")
+with download2:
+    st.download_button("↓ Полный результат JSON", json.dumps(result.to_dict(), ensure_ascii=False, indent=2), file_name="qaitu-analysis.json", mime="application/json", width="stretch")
+with note:
+    st.caption("Экспорт включает полный анализ и источники. Активные фильтры не сокращают отчёт.")
