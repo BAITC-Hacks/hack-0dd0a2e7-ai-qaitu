@@ -30,9 +30,9 @@ def result_navigation():
 <span class="qa-nav-label">Результат анализа</span>
 <div class="qa-nav-links">
 <a href="#overview" target="_self">Обзор</a>
-<a href="#matrix" target="_self">Матрица функций</a>
 <a href="#conclusion" target="_self">Заключение</a>
 <a href="#structure" target="_self">Структура</a>
+<a href="#matrix" target="_self">Матрица функций</a>
 <a href="#sources" target="_self">Источники и охват</a>
 <a href="#export" target="_self">Экспорт <span aria-hidden="true">↓</span></a>
 </div></nav>''', unsafe_allow_html=True)
