@@ -19,7 +19,7 @@ ROLE_LABELS = {
     "agree": "согласование", "coordinate": "координация", "control": "контроль",
     "audit": "контроль", "review": "проверка", "unknown": "роль не определена",
 }
-FINDING_LABELS = {"loss": "Возможная потеря", "duplicate": "Возможное дублирование", "conflict": "Потенциальный конфликт"}
+FINDING_LABELS = {"loss": "Возможная потеря", "duplicate": "Возможное дублирование", "conflict": "Потенциальный конфликт", "hygiene": "Проверка документа"}
 COVERAGE_LABELS = {
     "documents_before": "Документов до", "documents_after": "Документов после",
     "fragments_before": "Фрагментов до", "fragments_after": "Фрагментов после",
@@ -63,7 +63,7 @@ def compact_unit_labels(units: list[str]) -> dict[str, str]:
 def collect_sources(result: AnalysisResult) -> list[Fragment]:
     """Include both function sides and inherited ownership/modality context."""
     sources: dict[str, Fragment] = {source.id: source for source in result.sources}
-    for item in [*result.unit_changes, *result.findings]:
+    for item in [*result.unit_changes, *result.findings, *result.document_checks]:
         for source in item.sources:
             sources[source.id] = source
     functions = []

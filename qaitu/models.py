@@ -49,7 +49,7 @@ class ConfidenceAssessment:
 
 @dataclass
 class Finding:
-    kind: Literal["loss", "duplicate", "conflict"]
+    kind: Literal["loss", "duplicate", "conflict", "hygiene"]
     title: str
     explanation: str
     confidence: float
@@ -57,6 +57,7 @@ class Finding:
     recommendation: str = ""
     matrix_row_id: str = ""
     assessment: ConfidenceAssessment | None = None
+    code: str = ""
 
 
 @dataclass
@@ -101,6 +102,7 @@ class AnalysisResult:
     units_after: list[str] = field(default_factory=list)
     coverage: dict[str, int] = field(default_factory=dict)
     analysis_context: dict[str, str | bool] = field(default_factory=dict)
+    document_checks: list[Finding] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)

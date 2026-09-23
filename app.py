@@ -14,9 +14,11 @@ from qaitu.confidence import LEVELS, confidence_counts, confidence_level, metric
 from qaitu.demo import demo_documents
 from qaitu.extractors import extract_document
 from qaitu.exports import excel_report
+from qaitu.linter import LINTER_VERSION, inspect_document_pack, lint_documents
 from qaitu.pdf_report import pdf_report
 from qaitu.presentation import apply_theme, result_navigation, sidebar_brand, welcome, workspace_header
 from qaitu.reporting import COVERAGE_LABELS, FINDING_LABELS, NORM_LABELS, ROLE_LABELS, STATUS_LABELS, collect_sources, compact_unit_labels, markdown_report, ordered_matrix_rows
+from qaitu.review_ui import load_review_history, render_checklist, render_gate, render_linter
 
 
 st.set_page_config(page_title="QAITU · карта ответственности", page_icon="◈", layout="wide")
@@ -164,12 +166,14 @@ def expanded_matrix(rows, units, before_units, after_units, selected_id, initial
 
 with st.sidebar:
     sidebar_brand()
+    workspace_mode = st.selectbox("Режим работы", ["Разбор реорганизации", "Проверка проекта", "Пакет для СД / Комитета"],
+        help="Переключение представления не запускает повторный анализ. Для одной редакции выберите «Проверка проекта» и заполните только поле «После изменений».")
     st.markdown('<div class="qa-sidebar-title">Документы для сравнения</div>', unsafe_allow_html=True)
     before_files = st.file_uploader("До изменений", type=["pdf", "docx", "xlsx", "xlsm"], accept_multiple_files=True)
     after_files = st.file_uploader("После изменений", type=["pdf", "docx", "xlsx", "xlsm"], accept_multiple_files=True)
     after_complete = st.checkbox("Все необходимые документы «после» загружены", value=False,
         help="Ваше подтверждение полноты комплекта, а не результат проверки программы. Если не уверены, оставьте выключенным. Учитывается при следующем анализе.")
-    run = st.button("Сравнить документы", type="primary", width="stretch")
+    run = st.button("Проверить проект" if workspace_mode == "Проверка проекта" and not before_files else "Сравнить документы", type="primary", width="stretch")
     demo = st.button("Запустить контрольный пример", width="stretch")
     with st.expander("Дополнительная ИИ-проверка"):
         use_llm = st.checkbox("Разрешаю отправку фрагментов во внешний API", value=False)
@@ -185,17 +189,23 @@ with st.sidebar:
 demo = demo or st.session_state.pop("run_welcome_demo", False)
 
 if run or demo:
-    if run and (not before_files or not after_files):
-        st.error("Добавьте хотя бы один документ в каждый комплект: «до» и «после».")
+    single_review = bool(run and workspace_mode == "Проверка проекта" and not before_files)
+    if run and (not after_files or (not before_files and not single_review)):
+        st.error("Добавьте документы «до» и «после». Для одной редакции выберите «Проверка проекта» и загрузите документ в «После изменений».")
     else:
         try:
             with st.spinner("Читаем документы и сопоставляем назначения…"):
                 if demo:
                     before_docs, after_docs = demo_documents()
                 else:
-                    before_docs = [extract_document(file, file.name, "before") for file in before_files]
+                    before_docs = [extract_document(file, file.name, "before") for file in (before_files or [])]
                     after_docs = [extract_document(file, file.name, "after") for file in after_files]
-                local_result = analyze_documents(before_docs, after_docs, after_complete=after_complete if not demo else False)
+                if single_review:
+                    local_result = inspect_document_pack(after_docs, after_complete=after_complete)
+                else:
+                    local_result = analyze_documents(before_docs, after_docs, after_complete=after_complete if not demo else False)
+                    local_result.document_checks = lint_documents(before_docs + after_docs)
+                    local_result.analysis_context["linter_version"] = LINTER_VERSION
             # Save the completed local stage before the optional network stage.
             st.session_state["result"] = local_result
             st.session_state["mode"] = "demo" if demo else "uploaded"
@@ -205,7 +215,9 @@ if run or demo:
             }
             st.session_state["llm_status"] = "Локальный анализ · без передачи документов в API"
             st.session_state["llm_error"] = ""
-            if use_llm:
+            if use_llm and single_review:
+                st.session_state["llm_status"] = "Проверка одной редакции: локальные правила, без ИИ-проверки противоречий"
+            elif use_llm:
                 if not api_key:
                     st.session_state["llm_error"] = "ИИ-проверка пропущена: не указан API key. Локальные результаты сохранены."
                 else:
@@ -228,8 +240,9 @@ if result is None:
         st.rerun()
     st.stop()
 
-result_navigation()
-st.header("Результат сравнения", anchor="overview")
+if workspace_mode == "Разбор реорганизации" and not result.analysis_context.get("single_document_review"):
+    result_navigation()
+st.header("Проверка проекта" if result.analysis_context.get("single_document_review") else "Результат сравнения", anchor="overview")
 sources = collect_sources(result)
 document_packs = st.session_state.get("document_packs", {})
 is_demo = st.session_state.get("mode") == "demo"
@@ -244,6 +257,35 @@ if result.warnings:
         for warning in result.warnings:
             st.warning(warning)
 
+review_history, history_available = load_review_history(result)
+render_gate(result, review_history, available=history_available)
+
+if workspace_mode != "Разбор реорганизации" or result.analysis_context.get("single_document_review"):
+    if result.analysis_context.get("single_document_review"):
+        st.info("Проверена одна редакция. Сравнение «до → после», потери и передачи функций не рассчитывались.")
+    if workspace_mode != "Пакет для СД / Комитета":
+        render_linter(result)
+    render_checklist(result, review_history, available=history_available)
+    st.header("Экспорт результата", anchor="export")
+    if not result.analysis_context.get("single_document_review"):
+        short, full, excel = st.columns(3)
+        short.download_button("Краткий PDF", partial(pdf_report, result, full=False, document_packs=document_packs, is_demo=is_demo),
+            file_name="qaitu-summary.pdf", mime="application/pdf", on_click="ignore")
+        full.download_button("Полный PDF", partial(pdf_report, result, full=True, document_packs=document_packs, is_demo=is_demo),
+            file_name="qaitu-full-report.pdf", mime="application/pdf", on_click="ignore")
+        excel.download_button("Excel", partial(excel_report, result, document_packs=document_packs, is_demo=is_demo),
+            file_name="qaitu-analysis.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click="ignore")
+        st.caption("Эти отчёты содержат сравнение функций. Решения эксперта и проверки проекта — в отдельном листе согласования и полном JSON.")
+    st.download_button("JSON", json.dumps(result.to_dict(), ensure_ascii=False, indent=2),
+        file_name="qaitu-analysis.json", mime="application/json", on_click="ignore")
+    with st.expander("Все исходные фрагменты"):
+        source_map = {s.id: s for s in sources}
+        if source_map:
+            selected = st.selectbox("Исходный фрагмент", list(source_map),
+                format_func=lambda key: source_map[key].document + " · " + source_map[key].locator)
+            render_source(source_map[selected])
+    st.stop()
+
 counts = Counter(finding.kind for finding in result.findings)
 with st.container(key="overview_metrics"):
     columns = st.columns(4)
@@ -253,6 +295,13 @@ with st.container(key="overview_metrics"):
             ["Передача или изменение набора владельцев", "Преемник не найден в обработанном комплекте", "Кандидаты на дублирование: нужно сравнить роли и области", "Возможное совмещение исполнения и контроля"]):
         column.metric(label, number, help=explanation)
 st.caption("Индикаторы для проверки по цитатам, не подтверждённые нарушения.")
+
+with st.expander("Проверка документа и решения эксперта"):
+    lint_tab, checklist_tab = st.tabs(["Проверка документа", "Чек-лист согласования"])
+    with lint_tab:
+        render_linter(result)
+    with checklist_tab:
+        render_checklist(result, review_history, available=history_available)
 
 summary_section = st.container(key="summary_section")
 matrix_section = st.container(key="matrix_section")
