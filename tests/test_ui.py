@@ -47,6 +47,35 @@ class InterfaceTests(unittest.TestCase):
         self.assertTrue(app.session_state["result"].matrix_rows)
         self.assertEqual(app.session_state["mode"], "demo")
 
+    def test_report_downloads_are_deferred_and_use_unfiltered_result(self):
+        import streamlit as st
+        download = st.download_button
+        app = self.make_app()
+        with patch("streamlit.download_button", wraps=download) as buttons, \
+             patch("qaitu.pdf_report.pdf_report", return_value=b"%PDF-test") as pdf_export, \
+             patch("qaitu.exports.excel_report", return_value=b"xlsx-test") as excel_export:
+            widget(app.button, "Запустить контрольный пример").click().run()
+            self.assertFalse(app.exception)
+            pdf_export.assert_not_called()
+            excel_export.assert_not_called()
+            calls = {call.args[0]: call for call in buttons.call_args_list}
+            self.assertTrue({"Краткий PDF", "Полный PDF", "Excel", "JSON", "Markdown"} <= set(calls))
+            self.assertTrue(any("Дополнительно · технический формат" == item.label for item in app.expander))
+            short = calls["Краткий PDF"].args[1]
+            full = calls["Полный PDF"].args[1]
+            xlsx = calls["Excel"].args[1]
+            self.assertEqual(short(), b"%PDF-test")
+            self.assertFalse(pdf_export.call_args.kwargs["full"])
+            full()
+            self.assertTrue(pdf_export.call_args.kwargs["full"])
+            self.assertEqual(xlsx(), b"xlsx-test")
+            result = app.session_state["result"]
+            self.assertIs(pdf_export.call_args.args[0], result)
+            widget(app.text_input, "Найти функцию или владельца").set_value("нет-такой-функции").run()
+            self.assertFalse(app.exception)
+            self.assertIs(full.args[0], result)
+            self.assertTrue(result.matrix_rows)
+
     def test_confidence_bands_and_weak_filter_keep_full_export(self):
         app = self.make_app()
         self.assertFalse(widget(app.checkbox, "Все необходимые документы «после» загружены").value)

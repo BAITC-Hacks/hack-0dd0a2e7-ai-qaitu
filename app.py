@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 from collections import Counter
+from functools import partial
 
 import pandas as pd
 import streamlit as st
@@ -12,6 +13,8 @@ from qaitu.analyzer import analyze_documents
 from qaitu.confidence import LEVELS, confidence_counts, confidence_level, metric_lines
 from qaitu.demo import demo_documents
 from qaitu.extractors import extract_document
+from qaitu.exports import excel_report
+from qaitu.pdf_report import pdf_report
 from qaitu.presentation import apply_theme, result_navigation, sidebar_brand, welcome, workspace_header
 from qaitu.reporting import COVERAGE_LABELS, FINDING_LABELS, NORM_LABELS, ROLE_LABELS, STATUS_LABELS, collect_sources, compact_unit_labels, markdown_report, ordered_matrix_rows
 
@@ -411,11 +414,24 @@ with sources_section:
         st.info("Совпадений нет. Попробуйте другой пункт или ключевое слово.")
 
 st.divider()
-st.header("Скачать результат", anchor="export")
-download1, download2, note = st.columns([1, 1, 2])
-with download1:
-    st.download_button("↓ Заключение Markdown", markdown_report(result, is_demo=is_demo), file_name="qaitu-conclusion.md", mime="text/markdown", width="stretch", on_click="ignore")
-with download2:
-    st.download_button("↓ Полный результат JSON", json.dumps(result.to_dict(), ensure_ascii=False, indent=2), file_name="qaitu-analysis.json", mime="application/json", width="stretch", on_click="ignore")
-with note:
-    st.caption("Экспорт включает полный анализ и источники. Активные фильтры не сокращают отчёт.")
+st.header("Экспорт отчёта", anchor="export")
+st.caption("Краткий PDF — сводка, структура, до 10 приоритетных находок и основные изменения. Полный PDF — все кандидаты, матрица и полный каталог источников; может быть большим.")
+download_short, download_full, download_excel, download_json = st.columns(4)
+# Deferred generation runs only on download, not on every filter change. Bind
+# this completed result explicitly; do not access session state from worker threads.
+with download_short:
+    st.download_button("Краткий PDF", partial(pdf_report, result, full=False, document_packs=document_packs, is_demo=is_demo),
+        file_name="qaitu-summary.pdf", mime="application/pdf", icon="📄", width="stretch", on_click="ignore")
+with download_full:
+    st.download_button("Полный PDF", partial(pdf_report, result, full=True, document_packs=document_packs, is_demo=is_demo),
+        file_name="qaitu-full-report.pdf", mime="application/pdf", icon="📑", width="stretch", on_click="ignore")
+with download_excel:
+    st.download_button("Excel", partial(excel_report, result, document_packs=document_packs, is_demo=is_demo),
+        file_name="qaitu-analysis.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", icon="📊", width="stretch", on_click="ignore")
+with download_json:
+    st.download_button("JSON", json.dumps(result.to_dict(), ensure_ascii=False, indent=2),
+        file_name="qaitu-analysis.json", mime="application/json", icon="🧩", width="stretch", on_click="ignore")
+st.caption("PDF и Excel формируются локально по нажатию — без API и передачи документов. Фильтры экрана не меняют экспорт. В Excel 8 листов; проценты — числовые, а назначения можно фильтровать по подразделению.")
+with st.expander("Дополнительно · технический формат"):
+    st.download_button("Markdown", partial(markdown_report, result, is_demo=is_demo),
+        file_name="qaitu-conclusion.md", mime="text/markdown", width="stretch", on_click="ignore")
