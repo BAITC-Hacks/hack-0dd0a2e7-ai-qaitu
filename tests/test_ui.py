@@ -6,6 +6,8 @@ from unittest.mock import patch
 from streamlit.testing.v1 import AppTest
 
 from qaitu.models import AnalysisResult, Fragment, Function, FunctionMatch, MatrixRow
+from qaitu.confidence import assessment
+from qaitu.reporting import markdown_report
 
 
 APP = str(Path(__file__).resolve().parents[1] / "app.py")
@@ -44,6 +46,28 @@ class InterfaceTests(unittest.TestCase):
         self.assertFalse(app.exception, [error.message for error in app.exception])
         self.assertTrue(app.session_state["result"].matrix_rows)
         self.assertEqual(app.session_state["mode"], "demo")
+
+    def test_confidence_bands_and_weak_filter_keep_full_export(self):
+        app = self.make_app()
+        self.assertFalse(widget(app.checkbox, "Все необходимые документы «после» загружены").value)
+        widget(app.button, "Запустить контрольный пример").click().run()
+        result = app.session_state["result"]
+        self.assertTrue(all(f.assessment for f in result.findings))
+        self.assertTrue(any("Почему такая оценка" == e.label for e in app.expander))
+        finding = result.findings[0]
+        finding.title = "Слабый тестовый кандидат"
+        finding.confidence = .25
+        finding.assessment = assessment(.25, limitations=["Недостаточно данных"])
+        app.run()
+        self.assertFalse(app.exception)
+        self.assertFalse(any(finding.title in e.label for e in app.expander))
+        self.assertTrue(any("Скрыто слабых сигналов: 1" in c.value for c in app.caption))
+        self.assertIn(finding.title, markdown_report(result))
+        self.assertIn(finding.title, str(result.to_dict()))
+        widget(app.checkbox, "Показать слабые сигналы (менее 40%)").check().run()
+        self.assertFalse(app.exception)
+        self.assertTrue(any(finding.title in e.label and "25%" in e.label for e in app.expander))
+        self.assertEqual(len(app.session_state["result"].findings), len(result.findings))
 
     def test_matrix_pagination_keeps_full_result_and_recovers_after_filtering(self):
         app = self.make_app()

@@ -125,6 +125,24 @@ def main() -> int:
         for source in (function.source, *function.context_sources)
     ) and all(finding.sources and all(source.id in known for source in finding.sources)
               for finding in result.findings))
+    losses = [finding for finding in result.findings if finding.kind == "loss"]
+    check("R16: сохраняются три кандидата по прежним правам", len(losses) == 3 and all(
+        any(f"п. {point}" in source.locator for finding in losses for source in finding.sources)
+        for point in ("5.6.2", "5.6.3", "5.7.2")
+    ))
+    check("R16: уверенность объяснена и отсутствие не даёт 100%", all(
+        finding.assessment and finding.confidence == finding.assessment.score
+        and 0 <= finding.confidence < 1 and finding.assessment.reasons
+        for finding in result.findings
+    ))
+    check("R16: неполнота комплекта явно ограничивает уверенность потерь", all(
+        finding.confidence <= .89 and finding.assessment.metrics["package_completeness"] == "Не подтверждена"
+        and finding.assessment.metrics["owners_checked"] == 6
+        for finding in losses
+    ))
+    check("R16: дополнительные источники оценки существуют в документах", all(
+        source.id in known for finding in result.findings for source in finding.assessment.evidence
+    ))
     print(f"\nПроверено {len(checks)} условий: {sum(ok for _, ok in checks)} успешно.")
     print("Проверка локальная; не измеряет точность всех выводов и не заменяет экспертную оценку.")
     return 0 if all(ok for _, ok in checks) else 1

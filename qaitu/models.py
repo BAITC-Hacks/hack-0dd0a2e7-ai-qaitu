@@ -36,6 +36,18 @@ class Function:
 
 
 @dataclass
+class ConfidenceAssessment:
+    score: float
+    level: str
+    priority: str
+    method: str = "local-heuristic-v1"
+    reasons: list[str] = field(default_factory=list)
+    limitations: list[str] = field(default_factory=list)
+    metrics: dict[str, str | float | int | bool] = field(default_factory=dict)
+    evidence: list[Fragment] = field(default_factory=list)
+
+
+@dataclass
 class Finding:
     kind: Literal["loss", "duplicate", "conflict"]
     title: str
@@ -44,6 +56,7 @@ class Finding:
     sources: list[Fragment] = field(default_factory=list)
     recommendation: str = ""
     matrix_row_id: str = ""
+    assessment: ConfidenceAssessment | None = None
 
 
 @dataclass
@@ -73,6 +86,7 @@ class MatrixRow:
     norm_type: str = "duty"
     notes: list[str] = field(default_factory=list)
     candidate_overlap: bool = False
+    assessment: ConfidenceAssessment | None = None
 
 
 @dataclass
@@ -86,6 +100,7 @@ class AnalysisResult:
     units_before: list[str] = field(default_factory=list)
     units_after: list[str] = field(default_factory=list)
     coverage: dict[str, int] = field(default_factory=dict)
+    analysis_context: dict[str, str | bool] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
