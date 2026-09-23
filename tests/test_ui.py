@@ -41,9 +41,18 @@ class InterfaceTests(unittest.TestCase):
         self.assertTrue(any("<table" in item.value for item in app.markdown))
         navigation = next(item.value for item in app.markdown if 'qa-result-nav' in item.value)
         destinations = {header.proto.anchor for header in app.header}
-        for anchor in ("overview", "matrix", "conclusion", "structure", "sources", "export"):
+        for anchor in ("overview", "conclusion", "structure", "matrix", "sources", "export"):
             self.assertIn(f'href="#{anchor}"', navigation)
             self.assertIn(anchor, destinations)
+        self.assertLess(navigation.index('href="#conclusion"'), navigation.index('href="#matrix"'))
+
+    def test_new_welcome_action_runs_the_local_demo(self):
+        app = self.make_app()
+        welcome_button = next(button for button in app.button if button.key == "welcome_demo")
+        welcome_button.click().run()
+        self.assertFalse(app.exception, [error.message for error in app.exception])
+        self.assertTrue(app.session_state["result"].matrix_rows)
+        self.assertEqual(app.session_state["mode"], "demo")
 
     def test_matrix_pagination_keeps_full_result_and_recovers_after_filtering(self):
         app = self.make_app()

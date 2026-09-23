@@ -84,6 +84,18 @@ class IngestionTests(unittest.TestCase):
         self.assertEqual(result.fragments[0].text, "Функция | | 0 | False")
         self.assertIn("строка 2", result.fragments[1].locator)
 
+    def test_xlsx_and_xlsm_are_both_accepted(self):
+        book = Workbook()
+        book.active.append(["Департамент аудита", "проверяет закупки"])
+        stream = io.BytesIO()
+        book.save(stream)
+        data = stream.getvalue()
+        for extension in ("xlsx", "xlsm"):
+            with self.subTest(extension=extension):
+                result = extract_document(io.BytesIO(data), f"matrix.{extension}", "after")
+                self.assertEqual(result.fragments[0].text, "Департамент аудита | проверяет закупки")
+                self.assertIn("лист", result.fragments[0].locator)
+
     def test_spreadsheet_limits_fail_without_silent_truncation(self):
         book = Workbook()
         book.active.cell(10_001, 1, "За пределами лимита")
