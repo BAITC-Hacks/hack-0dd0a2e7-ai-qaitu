@@ -2,8 +2,10 @@ import unittest
 
 from qaitu.analyzer import analyze_documents
 from qaitu.analyzer import extract_units_and_functions
+from qaitu.analyzer import _find_conflicts
 from qaitu.demo import demo_documents
 from qaitu.extractors import document_from_lines
+from qaitu.models import Function
 from qaitu.report import conclusion
 
 
@@ -99,6 +101,14 @@ class AnalyzerTest(unittest.TestCase):
         ])]
         result = analyze_documents(before, after)
         self.assertEqual(sum(match.status == "lost" for match in result.function_matches), 0)
+
+    def test_corporate_wide_duties_do_not_create_role_conflicts(self):
+        source = document_from_lines("after", "after", ["Контроль и выполнение процесса закупок."]).fragments[0]
+        duties = [
+            Function("1", "БВА (общие функции)", "контролирует процедуры закупок и риски закупок", source, role="control"),
+            Function("2", "БВА (общие функции)", "выполняет процедуры закупок и оценку рисков закупок", source, role="execute"),
+        ]
+        self.assertEqual(_find_conflicts(duties), [])
 
 
 if __name__ == "__main__":

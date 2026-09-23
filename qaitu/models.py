@@ -18,6 +18,8 @@ class Document:
     name: str
     period: Literal["before", "after"]
     fragments: list[Fragment]
+    warnings: list[str] = field(default_factory=list)
+    metadata: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -26,6 +28,11 @@ class Function:
     unit: str
     text: str
     source: Fragment
+    norm_type: Literal["duty", "right", "prohibition"] = "duty"
+    role: str = "execute"
+    scope: str = ""
+    context_sources: tuple[Fragment, ...] = ()
+    owner_known: bool = True
 
 
 @dataclass
@@ -36,6 +43,7 @@ class Finding:
     confidence: float
     sources: list[Fragment] = field(default_factory=list)
     recommendation: str = ""
+    matrix_row_id: str = ""
 
 
 @dataclass
@@ -56,11 +64,28 @@ class FunctionMatch:
 
 
 @dataclass
+class MatrixRow:
+    id: str
+    label: str
+    before: list[Function]
+    after: list[Function]
+    status: str
+    norm_type: str = "duty"
+    notes: list[str] = field(default_factory=list)
+    candidate_overlap: bool = False
+
+
+@dataclass
 class AnalysisResult:
     unit_changes: list[UnitChange]
     function_matches: list[FunctionMatch]
     findings: list[Finding]
     warnings: list[str] = field(default_factory=list)
+    matrix_rows: list[MatrixRow] = field(default_factory=list)
+    sources: list[Fragment] = field(default_factory=list)
+    units_before: list[str] = field(default_factory=list)
+    units_after: list[str] = field(default_factory=list)
+    coverage: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
