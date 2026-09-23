@@ -131,6 +131,37 @@ class MetricsArithmeticTests(unittest.TestCase):
         self.assertEqual(result.before['n_points'], 3)
         self.assertEqual(result.after['n_points'], 3)
 
+    def test_did_requires_same_known_currency_unit(self):
+        configuration = {'W1': {'scope': 'ДНМ', 'verified': True, 'reason': 'Контроль выбран'}}
+        for affected_unit, control_unit in [('KZT', 'USD'), ('KZT', ''), ('', 'KZT'), ('', ''), ('unknown', 'unknown')]:
+            with self.subTest(affected_unit=affected_unit, control_unit=control_unit):
+                rows = [replace(point, unit=affected_unit) for point in basic_values('budget_fact', before=10, after=15)]
+                rows += [replace(point, unit=control_unit) for point in basic_values('budget_fact', scope='ДНМ', before=5, after=8)]
+                result = compare_metrics(rows, [event(metric='budget_fact')], control_scopes=configuration)[0]
+                self.assertEqual(result.method, 'simple')
+                self.assertIsNone(result.control_scope)
+                self.assertIsNone(result.adjusted_delta)
+                self.assertTrue(any('единицы измерения' in warning for warning in result.warnings))
+                self.assertTrue(all(not key.startswith('ДНМ:') for key in result.metric_ids))
+        matching = [replace(point, unit='KZT') for point in basic_values('budget_fact', before=10, after=15)
+                    + basic_values('budget_fact', scope='ДНМ', before=5, after=8)]
+        result = compare_metrics(matching, [event(metric='budget_fact')], control_scopes=configuration)[0]
+        self.assertEqual(result.method, 'diff_in_diff')
+        self.assertEqual(result.adjusted_delta, 2)
+
+    def test_incompatible_currency_does_not_coarsen_local_periods(self):
+        rows = [replace(value(year, month, number, 'budget_fact'), unit='KZT')
+                for year, number in [(2021, 10), (2023, 15)] for month in range(1, 13)]
+        rows += [replace(year_value(year, number, 'budget_fact', 'ДНМ'), unit='USD')
+                 for year, number in [(2021, 60), (2023, 96)]]
+        result = compare_metrics(rows, [event(metric='budget_fact')],
+                                 control_scopes={'W1': {'scope': 'ДНМ', 'verified': True, 'reason': 'Контроль выбран'}})[0]
+        self.assertEqual(result.method, 'trend_adjusted')
+        self.assertEqual(result.before['granularity'], 'month')
+        self.assertEqual(result.before['n_points'], 12)
+        self.assertEqual(result.after['n_points'], 12)
+        self.assertEqual(result.delta_abs, 5)
+
     def test_trend_uses_elapsed_dates_not_observation_index(self):
         origin = date(2022, 1, 1).toordinal()
         rows = []

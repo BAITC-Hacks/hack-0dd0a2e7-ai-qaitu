@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import textwrap
+from collections import Counter
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
@@ -196,6 +197,26 @@ def _render_events(events, controls, ingestion, prefix, synthetic, core_result, 
                 st.success("Настройки сохранены. Пересчитайте результаты по кнопке выше.")
 
 
+def _chart_rows(run, metric, granularity, unit):
+    """Plot one comparable raw series and mark only its evidenced controls."""
+    selected = [value for value in run.values if value.metric == metric and value.granularity == granularity and value.unit.strip() == unit]
+    indexed = {value.id: value for value in run.values}
+    controls = set()
+    for comparison in run.comparisons:
+        if comparison.metric != metric or not comparison.control_scope:
+            continue
+        evidence = [indexed[key] for key in comparison.metric_ids if key in indexed and indexed[key].metric == metric]
+        granularities = {summary["granularity"] for summary in (comparison.before, comparison.after) if summary.get("granularity")}
+        if not granularities:
+            granularities = {value.granularity for value in evidence}
+        if granularities == {granularity} and evidence and {value.unit.strip() for value in evidence} == {unit}:
+            controls.add(comparison.control_scope)
+    return [{"Период": value.period_end, "Значение": value.value, "Подразделение": value.unit_scope,
+             "Роль": "Контрольная группа" if value.unit_scope in controls else "Наблюдаемое подразделение",
+             "Детализация": value.granularity, "Единица": value.unit or "Не указана",
+             "Данные": data_label(value.is_synthetic), "Источник": _source_location(value.source)} for value in selected]
+
+
 def _render_dashboard(run):
     synthetic = run.is_synthetic
     label = data_label(synthetic)
@@ -206,17 +227,21 @@ def _render_dashboard(run):
     default_metric = "report_delay_days" if "report_delay_days" in metric_codes else (run.comparisons[0].metric if run.comparisons and run.comparisons[0].metric in metric_codes else metric_codes[0])
     metric = st.selectbox("Метрика на графике", metric_codes, index=metric_codes.index(default_metric), format_func=_metric_name, key="metrics_chart_metric_" + label)
     selected = [value for value in run.values if value.metric == metric]
-    controls = {comparison.control_scope for comparison in run.comparisons if comparison.control_scope}
-    data = pd.DataFrame([{"Период": value.period_end, "Значение": value.value, "Подразделение": value.unit_scope,
-                          "Роль": "Контрольная группа" if value.unit_scope in controls else "Наблюдаемое подразделение",
-                          "Данные": data_label(value.is_synthetic), "Источник": _source_location(value.source)} for value in selected])
-    units = sorted({value.unit for value in selected if value.unit})
-    chart = alt.Chart(data).mark_line(point=True).encode(x=alt.X("Период:T", title="Отчётный период"), y=alt.Y("Значение:Q", title="Значение" + (", " + units[0] if len(units) == 1 else "")), color=alt.Color("Подразделение:N", legend=alt.Legend(orient="bottom", columns=2, labelLimit=160)), strokeDash=alt.StrokeDash("Роль:N", legend=alt.Legend(orient="bottom", columns=1, labelLimit=300)), tooltip=["Данные:N", "Период:T", "Подразделение:N", "Значение:Q", "Источник:N", "Роль:N"])
+    granularity_counts = Counter(value.granularity for value in selected)
+    granularities = sorted(granularity_counts, key=lambda value: (-granularity_counts[value], {"month": 0, "quarter": 1, "year": 2}.get(value, 3), value))
+    granularity_labels = {"month": "Месяцы", "quarter": "Кварталы", "year": "Годы"}
+    granularity = st.selectbox("Детализация периода", granularities, format_func=lambda value: granularity_labels.get(value, value), key="metrics_chart_granularity_" + label + metric) if len(granularities) > 1 else granularities[0]
+    unit_counts = Counter(value.unit.strip() for value in selected if value.granularity == granularity)
+    units = sorted(unit_counts, key=lambda value: (-unit_counts[value], value))
+    unit = st.selectbox("Единица измерения на графике", units, format_func=lambda value: value or "Не указана", key="metrics_chart_unit_" + label + metric + granularity) if len(units) > 1 else units[0]
+    data = pd.DataFrame(_chart_rows(run, metric, granularity, unit))
+    st.caption(label + " · " + granularity_labels.get(granularity, granularity) + " · Единица: " + (unit or "не указана") + ". Разные периоды и единицы не объединяются.")
+    chart = alt.Chart(data).mark_line(point=True).encode(x=alt.X("Период:T", title="Отчётный период", axis=alt.Axis(format="%m.%Y", tickCount=6)), y=alt.Y("Значение:Q", title="Значение" + (", " + unit if unit else "")), color=alt.Color("Подразделение:N", legend=alt.Legend(orient="bottom", columns=2, labelLimit=160)), strokeDash=alt.StrokeDash("Роль:N", scale=alt.Scale(domain=["Контрольная группа", "Наблюдаемое подразделение"], range=[[6, 4], [1, 0]]), legend=None), tooltip=["Данные:N", "Период:T", "Детализация:N", "Подразделение:N", "Значение:Q", "Единица:N", "Источник:N", "Роль:N"])
     if run.events:
         event_data = pd.DataFrame([{"Дата": event.effective_date, "Событие": event.description or event.id, "Данные": data_label(event.is_synthetic)} for event in run.events])
         rules = alt.Chart(event_data).mark_rule(color="#b08b38", strokeDash=[5, 4]).encode(x="Дата:T", tooltip=["Данные:N", "Дата:T", "Событие:N"])
         chart = chart + rules
-    st.caption(label + " · Контрольные группы выделены типом линии; вертикальные линии — даты событий.")
+    st.caption(label + " · Контрольные группы — пунктир, наблюдаемые подразделения — сплошная линия; вертикальные линии — даты событий.")
     st.altair_chart(chart.properties(title=alt.TitleParams(text=label, subtitle=textwrap.wrap(_metric_name(metric), width=48), anchor="start"), height=300), width="stretch")
     if metric in {"findings_total", "findings_material"}:
         st.caption("Рост числа найденных нарушений имеет неоднозначный смысл: это может отражать как более тщательный аудит, так и ухудшение процессов.")

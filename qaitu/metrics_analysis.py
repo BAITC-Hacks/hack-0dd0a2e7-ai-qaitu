@@ -210,6 +210,10 @@ def compare_metrics(values, events, *, control_scopes=None):
     synthetic = _mode(values, events)
     indexed = _deduplicate(values)
     group = defaultdict(list)
+    series_units = defaultdict(set)
+    for value in values:
+        # Units are normalized by ingestion; never infer a currency conversion.
+        series_units[value.metric, value.unit_scope].add(value.unit.strip())
     for (metric, scope, _, _), point in indexed.items():
         group[metric, scope].append(point)
     comparisons = []
@@ -228,6 +232,15 @@ def compare_metrics(values, events, *, control_scopes=None):
             # A verified control has to use the same time buckets too.
             control = _control_config(control_scopes, event, scope)
             control_raw = group.get((metric, control), []) if control else []
+            control_unit_warning = None
+            if control and control_raw:
+                affected_units = series_units[metric, scope]
+                control_units = series_units[metric, control]
+                unknown_units = {'', '?', 'unknown', 'неизвестно', 'не указано'}
+                if (len(affected_units) != 1 or affected_units != control_units
+                        or any(unit.casefold() in unknown_units for unit in affected_units)):
+                    control_unit_warning = "Контроль не использован: единицы измерения основного ряда и контроля различаются или не определены. Требуется подтверждённое приведение единиц."
+                    control, control_raw = None, []
             target = max((point.granularity for point in raw), key=GRANULARITY.get)
             control_target = max((point.granularity for point in raw + control_raw), key=GRANULARITY.get)
             if control and control_target != target:
@@ -240,6 +253,8 @@ def compare_metrics(values, events, *, control_scopes=None):
                         and not any(other.id != event.id and control in other.units and candidate_before[0].start <= _date(other.effective_date) <= candidate_after[-1].end for other in events)):
                     target = control_target
             points, excluded, warnings = _canonical(raw, target, aggregation)
+            if control_unit_warning:
+                warnings.append(control_unit_warning)
             before = [point for point in points if point.end < effective]
             after = [point for point in points if point.start > effective]
             excluded.extend(f"{point.start}/{point.end}: пересекает дату изменения" for point in points if point not in before + after)

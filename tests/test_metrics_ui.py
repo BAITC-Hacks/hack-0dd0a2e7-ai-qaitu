@@ -9,8 +9,8 @@ from unittest.mock import patch
 from streamlit.testing.v1 import AppTest
 
 from qaitu.config import OpenAISettings
-from qaitu.metrics_models import Hypothesis, IngestionResult, MetricAmbiguity, MetricSource, MetricValue, MetricsRun, Recommendation, StructuralEvent
-from qaitu.metrics_ui import TEST_LABEL, value_rows
+from qaitu.metrics_models import Hypothesis, IngestionResult, MetricAmbiguity, MetricSource, MetricValue, MetricsRun, PeriodComparison, Recommendation, StructuralEvent
+from qaitu.metrics_ui import TEST_LABEL, _chart_rows, value_rows
 
 APP = str(Path(__file__).resolve().parents[1] / "app.py")
 
@@ -109,6 +109,51 @@ class MetricsInterfaceTests(unittest.TestCase):
         rows = value_rows(ingestion.values)
         self.assertTrue(all(row["Данные"] == TEST_LABEL for row in rows))
         self.assertTrue(all(row["Источник"] and row["Начало"] and row["Конец"] for row in rows))
+
+    def test_control_role_requires_matching_metric_period_and_units(self):
+        ingestion, *_ = fixture()
+        observed = ingestion.values[0]
+        control = deepcopy(observed)
+        control.id, control.unit_scope = "control-delay", "ДНМ"
+        headcount = deepcopy(control)
+        headcount.id, headcount.metric, headcount.unit = "control-headcount", "headcount", "чел."
+        comparison = PeriodComparison("cmp", "report_delay_days", "ДККМ", "event", {"granularity": "month"}, {"granularity": "month"}, 1, None, method="diff_in_diff", metric_ids=[observed.id, control.id], control_scope="ДНМ")
+        run = MetricsRun("chart", True, values=[observed, control, headcount], comparisons=[comparison])
+        self.assertEqual(_chart_rows(run, "headcount", "month", "чел.")[0]["Роль"], "Наблюдаемое подразделение")
+        self.assertEqual(_chart_rows(run, "report_delay_days", "month", "дни")[1]["Роль"], "Контрольная группа")
+        comparison.before["granularity"] = comparison.after["granularity"] = "year"
+        self.assertTrue(all(row["Роль"] == "Наблюдаемое подразделение" for row in _chart_rows(run, "report_delay_days", "month", "дни")))
+        comparison.before["granularity"] = comparison.after["granularity"] = "month"
+        control.unit = "часы"
+        self.assertEqual(_chart_rows(run, "report_delay_days", "month", "часы")[0]["Роль"], "Наблюдаемое подразделение")
+
+    def test_chart_separates_months_years_and_currencies(self):
+        ingestion, *_ = fixture(synthetic=False)
+        monthly = ingestion.values[0]
+        monthly.metric, monthly.unit = "budget_fact", "KZT"
+        annual = deepcopy(monthly)
+        annual.id, annual.granularity, annual.value = "annual", "year", 120
+        dollars = deepcopy(monthly)
+        dollars.id, dollars.unit, dollars.value = "dollars", "USD", 30
+        second_month = deepcopy(monthly)
+        second_month.id, second_month.period_end = "month2", "2022-02-28"
+        values = [monthly, second_month, annual, dollars]
+        run = MetricsRun("mixed-units", False, values=values)
+        app = self.workspace()
+        app.session_state["metrics_real_ingestion"] = IngestionResult(values=values)
+        app.session_state["metrics_real_run"] = run
+        app.run()
+        self.assertFalse(app.exception, [item.message for item in app.exception])
+        self.assertEqual(widget(app.selectbox, "Детализация периода").value, "month")
+        self.assertEqual(widget(app.selectbox, "Единица измерения на графике").value, "KZT")
+        self.assertEqual(len(_chart_rows(run, "budget_fact", "month", "KZT")), 2)
+        self.assertEqual(_chart_rows(run, "budget_fact", "month", "USD")[0]["Значение"], 30)
+        self.assertEqual(_chart_rows(run, "budget_fact", "year", "KZT")[0]["Значение"], 120)
+        widget(app.selectbox, "Единица измерения на графике").set_value("USD").run()
+        self.assertFalse(app.exception)
+        widget(app.selectbox, "Детализация периода").set_value("year").run()
+        self.assertFalse(app.exception)
+        self.assertFalse(any(item.label == "Единица измерения на графике" for item in app.selectbox))
 
     def test_recommendation_buttons_store_a_human_decision(self):
         app = self.workspace()
