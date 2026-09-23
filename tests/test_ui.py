@@ -29,6 +29,15 @@ class InterfaceTests(unittest.TestCase):
         self.assertTrue(any("КОНТРОЛЬНЫЙ ПРИМЕР" in item.value for item in app.info))
         self.assertTrue(any("<table" in item.value for item in app.markdown))
         self.assertEqual(len(app.tabs), 4)
+        self.assertEqual(app.tabs[0].label, "Заключение")
+
+    def test_new_welcome_action_runs_the_local_demo(self):
+        app = self.make_app()
+        welcome_button = next(button for button in app.button if button.key == "welcome_demo")
+        welcome_button.click().run()
+        self.assertFalse(app.exception, [error.message for error in app.exception])
+        self.assertTrue(app.session_state["result"].matrix_rows)
+        self.assertEqual(app.session_state["mode"], "demo")
 
     def test_matrix_escapes_markup_and_filters_keep_full_result(self):
         old = Fragment("old", "old.docx", "Готовит отчёт <script>alert(1)</script>", "п. 1", "before")
