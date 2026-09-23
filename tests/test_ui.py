@@ -159,6 +159,14 @@ class InterfaceTests(unittest.TestCase):
         self.assertFalse(app.exception)
         self.assertEqual(app.session_state["result"].ai_review["status"], "skipped")
 
+    def test_welcome_demo_is_local_even_with_saved_key(self):
+        self.settings.return_value = OpenAISettings(api_key="fake-server-key")
+        app = self.make_app()
+        next(item for item in app.button if item.key == "welcome_demo").click().run()
+        self.agent.assert_not_called()
+        self.assertFalse(app.exception)
+        self.assertTrue(app.session_state["result"].matrix_rows)
+
 
 if __name__ == "__main__":
     unittest.main()
