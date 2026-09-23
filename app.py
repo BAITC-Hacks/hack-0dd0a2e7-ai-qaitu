@@ -12,44 +12,17 @@ from qaitu.analyzer import analyze_documents
 from qaitu.config import load_openai_settings
 from qaitu.demo import demo_documents
 from qaitu.extractors import extract_document
+from qaitu.presentation import apply_theme, result_navigation, sidebar_brand, welcome, workspace_header
 from qaitu.reporting import AI_COMPARISON_LABELS, AI_STATUS_LABELS, COVERAGE_LABELS, FINDING_LABELS, NORM_LABELS, ROLE_LABELS, STATUS_LABELS, collect_sources, compact_unit_labels, markdown_report, ordered_matrix_rows
 
 
 st.set_page_config(page_title="QAITU · карта ответственности", page_icon="◈", layout="wide")
-st.markdown("""
-<style>
-.block-container{padding-top:3.5rem;padding-bottom:3rem;max-width:1600px}
-h1{font-size:2.1rem!important;letter-spacing:-.045em}h2{font-size:1.45rem!important;letter-spacing:-.025em}h3{font-size:1.12rem!important}
-[data-testid="stMetric"]{border:1px solid #8b9ca733;border-radius:14px;padding:16px 18px}
-[data-testid="stMetricValue"]{font-size:2rem;font-weight:650}[data-testid="stMetricLabel"]{font-size:.85rem}
-.qa-kicker{color:#128976;font-weight:700;letter-spacing:.17em;font-size:.75rem;margin-bottom:.5rem}
-[data-testid="stBaseButton-primary"]{background:#128976;border-color:#128976}
-[data-testid="stButton"] button[kind="primary"]{background-color:#128976!important;border-color:#128976!important}
-[role="tab"][aria-selected="true"]{color:#128976}
-.qa-matrix-wrap{max-height:610px;overflow:auto;border:1px solid #8b9ca744;border-radius:12px;margin:12px 0}
-.qa-matrix{border-collapse:separate;border-spacing:0;width:100%;font:.82rem sans-serif}
-.qa-matrix th,.qa-matrix td{padding:10px;border-right:1px solid #8b9ca722;border-bottom:1px solid #8b9ca733}
-.qa-matrix th{background:var(--secondary-background-color,#f0f2f6);text-align:center;font-weight:600;min-width:96px}
-.qa-matrix th.qa-group{font-size:.78rem;letter-spacing:.12em;color:#128976}
-.qa-matrix.qa-compact th{min-width:42px;max-width:54px;padding:8px 4px;font-size:.7rem}
-.qa-matrix.qa-compact .qa-label{min-width:220px;max-width:260px;font-size:.8rem;padding:10px}
-.qa-matrix td{text-align:center;font-weight:650}
-.qa-matrix .qa-label{position:sticky;left:0;min-width:270px;max-width:350px;text-align:left;z-index:1;background:var(--background-color,#fff);font-weight:400;line-height:1.45}
-.qa-matrix .qa-label small{display:block;color:var(--text-color,#51616f);opacity:.72;margin-top:4px}
-.qa-matrix thead{position:sticky;top:0;z-index:3}.qa-matrix .qa-divider{border-left:3px solid #12897666}
-.qa-present{background:#13a48917;color:#15836d}.qa-change{background:#3285dc22;color:#367cc4}
-.qa-missing{background:#df565422;color:#c84545}.qa-overlap{background:#e1aa3228;color:#967013}
-.qa-unknown{background:#8b9ca726;color:#74828c}.qa-empty{color:#91a0aa}
-.qa-absent{background:repeating-linear-gradient(135deg,#8b9ca70a,#8b9ca70a 4px,#8b9ca719 4px,#8b9ca719 5px);color:#91a0aa}
-.qa-selected .qa-label{box-shadow:inset 4px 0 #128976}
-@media(max-width:600px){.block-container{padding:1rem}.qa-matrix .qa-label{min-width:210px;max-width:230px}}
-</style>
-""", unsafe_allow_html=True)
+apply_theme()
 
 
 def render_source(source, *, context=False):
     st.caption(("Контекст · " if context else "") + ("ДО" if source.period == "before" else "ПОСЛЕ") + " · " + source.document)
-    st.text(f"{source.locator} · {source.id}")
+    st.caption(f"{source.locator} · {source.id}")
     st.text(source.text)
 
 
@@ -59,14 +32,14 @@ def render_assignments(functions):
         return
     for function in functions:
         with st.container(border=True):
-            st.write(function.unit)
+            st.markdown(f'<h4 class="qa-assignment-title">{html.escape(function.unit)}</h4>', unsafe_allow_html=True)
             st.caption(NORM_LABELS.get(function.norm_type, function.norm_type) + " · " + ROLE_LABELS.get(function.role, function.role))
             if not function.owner_known:
                 st.warning("Владелец требует проверки по контексту.")
             if function.scope:
                 st.text("Область: " + function.scope)
             st.text(function.text)
-            with st.expander("Цитата и контекст назначения", expanded=True):
+            with st.expander("Цитата и контекст назначения", expanded=False):
                 render_source(function.source)
                 seen = {function.source.id}
                 for context in function.context_sources:
@@ -125,7 +98,7 @@ def render_matrix(rows, units, before_units, after_units, selected_id, compact=T
         label = row.label if len(row.label) <= 170 else row.label[:167] + "…"
         note = STATUS_LABELS.get(row.status, row.status) + (" · ⚑ проверить пересечение" if row.candidate_overlap else "")
         selected = "qa-selected" if row.id == selected_id else ""
-        parts.append(f'<tr class="{selected}"><td class="qa-label" title="{esc(row.label)}">{esc(label)}<small>{esc(note)}</small></td>')
+        parts.append(f'<tr class="{selected}"><td class="qa-label" title="{esc(row.label)}"><span class="qa-function-text">{esc(label)}</span><small>{esc(note)}</small></td>')
         for side, present in (("before", before_units), ("after", after_units)):
             for index, unit in enumerate(units):
                 css, text, description = matrix_cell(row, unit, side, present)
@@ -141,10 +114,9 @@ AI_MODE = "ИИ + локальное сравнение"
 LOCAL_MODE = "Локальное сравнение"
 
 with st.sidebar:
-    st.markdown("### ◈ QAITU")
-    st.caption("Рабочее пространство аналитика")
+    sidebar_brand()
     st.divider()
-    st.markdown("**01 / Комплекты документов**")
+    st.markdown('<div class="qa-sidebar-title">Комплекты документов</div><div class="qa-sidebar-hint">Добавьте исходную и новую редакции.</div>', unsafe_allow_html=True)
     before_files = st.file_uploader("До изменений", type=["pdf", "docx", "xlsx", "xlsm"], accept_multiple_files=True)
     after_files = st.file_uploader("После изменений", type=["pdf", "docx", "xlsx", "xlsm"], accept_multiple_files=True)
     comparison_mode = st.radio("Режим сравнения", [AI_MODE, LOCAL_MODE], index=0 if settings.api_key else 1)
@@ -169,9 +141,9 @@ with st.sidebar:
     st.caption("PDF с текстом · DOCX · XLSX / XLSM")
     st.caption("Для сканированных PDF нужен предварительный OCR. Выводы требуют проверки сотрудником.")
 
-st.markdown('<div class="qa-kicker">QAITU / ORGANIZATIONAL INTELLIGENCE</div>', unsafe_allow_html=True)
-st.title("Карта ответственности")
-st.caption("Что изменилось в структуре, кому переданы функции и где нужна проверка — с цитатами обеих редакций.")
+workspace_header()
+welcome_requested = st.session_state.pop("run_welcome_demo", False)
+demo = demo or welcome_requested
 
 if run or demo:
     if run and (not before_files or not after_files):
@@ -193,7 +165,7 @@ if run or demo:
                 for period, documents in (("before", before_docs), ("after", after_docs))
             }
             local_result.ai_review = {"status": "skipped", "model": "", "summary": "Выбран локальный режим. ИИ-сравнение не запускалось.", "comparisons": []}
-            if use_ai:
+            if use_ai and not welcome_requested:
                 api_key = api_key_override.strip() or settings.api_key
                 if not api_key:
                     local_result.ai_review = {"status": "skipped", "model": model, "summary": "ИИ-сравнение не запускалось: не указан API key. Локальные результаты сохранены.", "comparisons": [], "error": "Добавьте серверный ключ или ключ для сеанса в настройках ИИ-агента."}
@@ -218,22 +190,13 @@ if run or demo:
 
 result = st.session_state.get("result")
 if result is None:
-    st.divider()
-    left, right = st.columns([1.4, 1], gap="large")
-    with left:
-        st.subheader("От двух комплектов — к проверяемому заключению")
-        st.write("Загрузите положения, оргструктуры, должностные инструкции и приложения слева. Сравнение сохраняет связь между функцией, владельцем и исходным пунктом.")
-        st.info("Начните с контрольного примера: он показывает передачу функций, возможную потерю, пересечение и конфликт ролей на синтетических документах.")
-    with right:
-        with st.container(border=True):
-            st.markdown("**01 · Сопоставить**")
-            st.caption("Подразделения и назначения до / после")
-            st.markdown("**02 · Проверить**")
-            st.caption("Матрица, роли, области ответственности и цитаты")
-            st.markdown("**03 · Передать заключение**")
-            st.caption("Рекомендации и полный отчёт в Markdown / JSON")
+    if welcome():
+        st.session_state["run_welcome_demo"] = True
+        st.rerun()
     st.stop()
 
+result_navigation()
+st.header("Обзор анализа", anchor="overview")
 sources = collect_sources(result)
 document_packs = st.session_state.get("document_packs", {})
 is_demo = st.session_state.get("mode") == "demo"
@@ -264,10 +227,14 @@ for column, label, number, explanation in zip(columns,
     column.metric(label, number, help=explanation)
 st.caption("Количество индикаторов, а не подтверждённых нарушений. Числовая уверенность эвристики не является вероятностью правильного вывода.")
 
-tab_ai, tab_summary, tab_units, tab_matrix, tab_sources = st.tabs(["ИИ-сравнение", "Заключение", "Структура", "Матрица функций", "Источники и охват"])
+summary_section = st.container(key="summary_section")
+ai_section = st.container(key="ai_section")
+units_section = st.container(key="units_section")
+matrix_section = st.container(key="matrix_section")
+sources_section = st.container(key="sources_section")
 
-with tab_ai:
-    st.subheader("Смысловое сравнение документов")
+with ai_section:
+    st.header("Смысловое сравнение документов", anchor="semantic")
     st.caption("ИИ сопоставляет содержание и объясняет изменения с цитатами. Это отдельный слой анализа: назначения в матрице вычислены локальным алгоритмом и не переписаны моделью.")
     if ai_status == "completed":
         st.success("ИИ-сравнение завершено. Все фрагменты каталога вошли в успешно обработанные пакеты.")
@@ -336,8 +303,8 @@ with tab_ai:
                             if not evidence.get(source_id):
                                 st.text(source.text)
 
-with tab_matrix:
-    st.subheader("Функция × подразделение")
+with matrix_section:
+    st.header("Функция × подразделение", anchor="matrix")
     st.caption("Локальный алгоритм · одинаковые колонки до / после. Статусы рассчитаны по полному комплекту; фильтры меняют только отображение. Смысловые выводы ИИ — в отдельной вкладке.")
     pack_columns = st.columns(2)
     for column, period, label in zip(pack_columns, ("before", "after"), ("ДО", "ПОСЛЕ")):
@@ -375,13 +342,16 @@ with tab_matrix:
     if not rows or not units:
         st.info("Для выбранных условий строки не найдены. Измените фильтр или проверьте охват извлечения.")
     else:
-        compact = st.checkbox("Компактные названия колонок", value=True)
-        page_size = 30
+        page_size = 10
         page_count = (len(rows) + page_size - 1) // page_size
-        page = st.selectbox("Страница матрицы", list(range(page_count)), format_func=lambda value: f"{value + 1} / {page_count}") if page_count > 1 else 0
+        display_options, row_picker = st.columns([1, 2.5], vertical_alignment="bottom")
+        with display_options:
+            compact = st.checkbox("Компактные названия колонок", value=True)
+            page = st.selectbox("Страница матрицы", list(range(page_count)), format_func=lambda value: f"{value + 1} / {page_count}") if page_count > 1 else 0
         page_rows = rows[page * page_size:(page + 1) * page_size]
         lookup = {row.id: row for row in page_rows}
-        selected_id = st.selectbox("Выберите строку для просмотра цитат", list(lookup), format_func=lambda key: lookup[key].label[:150], key="matrix_row_selection")
+        with row_picker:
+            selected_id = st.selectbox("Выберите строку для просмотра цитат", list(lookup), format_func=lambda key: lookup[key].label[:150], key="matrix_row_selection")
         render_matrix(page_rows, units, before_units, after_units, selected_id, compact=compact)
         if compact:
             with st.expander("Обозначения владельцев · полные названия"):
@@ -398,7 +368,8 @@ with tab_matrix:
             st.warning("Несколько владельцев: сопоставьте роли и область ответственности. Несколько отметок сами по себе не доказывают дубль.")
         for note in row.notes:
             st.info(note)
-        before_column, after_column = st.columns(2, gap="large")
+        with st.container(key="evidence_columns"):
+            before_column, after_column = st.columns(2, gap="medium")
         with before_column:
             st.markdown("**ДО / исходные назначения**")
             render_assignments(row.before)
@@ -406,8 +377,8 @@ with tab_matrix:
             st.markdown("**ПОСЛЕ / найденные назначения**")
             render_assignments(row.after)
 
-with tab_summary:
-    st.subheader("Что проверить в первую очередь")
+with summary_section:
+    st.header("Что проверить в первую очередь", anchor="conclusion")
     st.caption("Каждый вывод опирается на фрагменты. Подтверждение нарушения и решение о перераспределении остаются за сотрудником.")
     unit_counts = Counter(change.status for change in result.unit_changes)
     assignment_counts = Counter(row.status for row in result.matrix_rows)
@@ -435,14 +406,19 @@ with tab_summary:
     st.markdown("**Изменения структуры**")
     for change in result.unit_changes:
         st.write(f"{STATUS_LABELS.get(change.status, change.status)}: {change.before or '—'} → {change.after or '—'}")
-    st.caption("Полная матрица доступна в соседней вкладке и в скачиваемом подробном отчёте.")
+    st.caption("Полная матрица доступна в разделе «Матрица функций» и в скачиваемом подробном отчёте.")
 
-with tab_units:
-    st.subheader("Изменения организационной структуры")
+with units_section:
+    st.header("Изменения организационной структуры", anchor="structure")
     st.caption("Появление или отсутствие в перечне не доказывает юридическое создание, ликвидацию или преобразование без распорядительного документа.")
     if result.unit_changes:
         data = [{"Статус": STATUS_LABELS.get(item.status, item.status), "До": item.before or "—", "После": item.after or "—", "Источники": ", ".join(source.id for source in item.sources)} for item in result.unit_changes]
-        st.dataframe(pd.DataFrame(data), width="stretch", hide_index=True)
+        st.dataframe(pd.DataFrame(data), width="stretch", hide_index=True, row_height=56,
+            height=min(56 * len(data) + 40, 440),
+            column_config={"Статус": st.column_config.TextColumn(width="medium"),
+                           "До": st.column_config.TextColumn(width="large"),
+                           "После": st.column_config.TextColumn(width="large"),
+                           "Источники": st.column_config.TextColumn(width="medium")})
         unit_index = st.selectbox("Проверить изменение по источникам", range(len(result.unit_changes)), format_func=lambda index: (result.unit_changes[index].before or "—") + " → " + (result.unit_changes[index].after or "—"))
         for source in result.unit_changes[unit_index].sources:
             with st.container(border=True):
@@ -450,8 +426,8 @@ with tab_units:
     else:
         st.info("Изменения структуры не выделены. Проверьте заголовки и качество извлечённого текста.")
 
-with tab_sources:
-    st.subheader("Проверяемость и охват")
+with sources_section:
+    st.header("Проверяемость и охват", anchor="sources")
     source_counts = Counter(source.period for source in sources)
     c1, c2, c3 = st.columns(3)
     c1.metric("Фрагменты до", source_counts["before"])
@@ -487,10 +463,11 @@ with tab_sources:
         st.info("Совпадений нет. Попробуйте другой пункт или ключевое слово.")
 
 st.divider()
+st.header("Скачать результат", anchor="export")
 download1, download2, note = st.columns([1, 1, 2])
 with download1:
-    st.download_button("↓ Заключение Markdown", markdown_report(result, is_demo=is_demo), file_name="qaitu-conclusion.md", mime="text/markdown", width="stretch")
+    st.download_button("↓ Заключение Markdown", markdown_report(result, is_demo=is_demo), file_name="qaitu-conclusion.md", mime="text/markdown", width="stretch", on_click="ignore")
 with download2:
-    st.download_button("↓ Полный результат JSON", json.dumps(result.to_dict(), ensure_ascii=False, indent=2), file_name="qaitu-analysis.json", mime="application/json", width="stretch")
+    st.download_button("↓ Полный результат JSON", json.dumps(result.to_dict(), ensure_ascii=False, indent=2), file_name="qaitu-analysis.json", mime="application/json", width="stretch", on_click="ignore")
 with note:
     st.caption("Экспорт включает полный анализ и источники. Активные фильтры не сокращают отчёт.")

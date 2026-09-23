@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,7 +13,7 @@ APP = str(Path(__file__).resolve().parents[1] / "app.py")
 
 
 def widget(widgets, label):
-    return next(item for item in widgets if item.label == label)
+    return next(item for item in widgets if item.label == label and item.key != "welcome_demo")
 
 
 class InterfaceTests(unittest.TestCase):
@@ -32,12 +33,34 @@ class InterfaceTests(unittest.TestCase):
 
     def test_demo_runs_locally_with_matrix_and_explicit_sample_label(self):
         app = self.make_app()
+        self.assertFalse(any('qa-result-nav' in item.value for item in app.markdown))
         widget(app.button, "Запустить контрольный пример").click().run()
         self.agent.assert_not_called()
         self.assertFalse(app.exception, [error.message for error in app.exception])
         self.assertTrue(any("КОНТРОЛЬНЫЙ ПРИМЕР" in item.value for item in app.info))
         self.assertTrue(any("<table" in item.value for item in app.markdown))
-        self.assertEqual(len(app.tabs), 5)
+        navigation = next(item.value for item in app.markdown if 'qa-result-nav' in item.value)
+        destinations = {header.proto.anchor for header in app.header}
+        for anchor in ("overview", "matrix", "conclusion", "structure", "sources", "export"):
+            self.assertIn(f'href="#{anchor}"', navigation)
+            self.assertIn(anchor, destinations)
+
+    def test_matrix_pagination_keeps_full_result_and_recovers_after_filtering(self):
+        app = self.make_app()
+        widget(app.button, "Запустить контрольный пример").click().run()
+        result = app.session_state["result"]
+        template = result.matrix_rows[0]
+        result.matrix_rows = [replace(template, id=f"row-{i}", label=f"Функция {i}") for i in range(23)]
+        app.run()
+        widget(app.selectbox, "Страница матрицы").set_value(2).run()
+        self.assertFalse(app.exception)
+        table = next(item.value for item in app.markdown if '<table' in item.value)
+        self.assertEqual(table.count('<tr class='), 3)
+        widget(app.text_input, "Найти функцию или владельца").set_value("Функция 22").run()
+        self.assertFalse(app.exception)
+        self.assertEqual(len(app.session_state["result"].matrix_rows), 23)
+        table = next(item.value for item in app.markdown if '<table' in item.value)
+        self.assertEqual(table.count('<tr class='), 1)
 
     def test_matrix_escapes_markup_and_filters_keep_full_result(self):
         old = Fragment("old", "old.docx", "Готовит отчёт <script>alert(1)</script>", "п. 1", "before")
