@@ -36,6 +36,15 @@ class AiReviewerTests(unittest.TestCase):
         self.assertEqual(findings[0].sources, self.after.fragments)
         self.assertFalse(client.return_value.responses.create.call_args.kwargs["store"])
 
+    def test_llm_self_report_is_labelled_capped_and_never_confirmed(self):
+        value = self.finding()
+        value["confidence"] = 1.0
+        findings, _ = self.run_review(response([value]))
+        self.assertEqual(findings[0].confidence, .89)
+        self.assertEqual(findings[0].assessment.method, "llm-self-report")
+        self.assertEqual(findings[0].assessment.metrics["reported_score"], 1.0)
+        self.assertTrue(findings[0].assessment.limitations)
+
     def test_exhausted_time_budget_makes_no_api_request(self):
         with patch("openai.OpenAI") as client, patch.object(ai_reviewer, "MAX_REVIEW_SECONDS", 0):
             findings = ai_reviewer.review_with_llm([self.before], [self.after], self.result, "test-key")

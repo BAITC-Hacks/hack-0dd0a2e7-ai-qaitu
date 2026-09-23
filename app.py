@@ -9,6 +9,7 @@ import streamlit as st
 
 from qaitu.ai_reviewer import MAX_BATCHES, MAX_BATCH_CHARS, MAX_REVIEW_SECONDS, review_with_llm
 from qaitu.analyzer import analyze_documents
+from qaitu.confidence import LEVELS, confidence_counts, confidence_level, metric_lines
 from qaitu.demo import demo_documents
 from qaitu.extractors import extract_document
 from qaitu.presentation import apply_theme, result_navigation, sidebar_brand, welcome, workspace_header
@@ -23,6 +24,28 @@ def render_source(source, *, context=False):
     st.caption(("Контекст · " if context else "") + ("ДО" if source.period == "before" else "ПОСЛЕ") + " · " + source.document)
     st.caption(source.locator)
     st.text(source.text)
+
+
+def render_confidence(value, *, finding=False):
+    if value is None:
+        st.caption("Подробная оценка отсутствует. Повторите анализ для расчёта уверенности.")
+        return
+    st.write(f"Уверенность алгоритма: {value.score:.0%} · {LEVELS[value.level]}")
+    if finding:
+        st.caption(value.priority)
+    st.caption("Эвристика, не вероятность нарушения. Уверенность не определяет тяжесть последствий.")
+    with st.expander("Почему такая оценка"):
+        st.caption("Метод: " + value.method)
+        for reason in value.reasons:
+            st.text("✓ " + reason)
+        for limitation in value.limitations:
+            st.text("⚠ " + limitation)
+        for line in metric_lines(value):
+            st.text(line)
+        if value.evidence:
+            st.caption("Сравниваемые пункты / ближайшие совпадения — для проверки, не доказательство соответствия")
+            for source in value.evidence:
+                render_source(source)
 
 
 def render_assignments(functions):
@@ -141,6 +164,8 @@ with st.sidebar:
     st.markdown('<div class="qa-sidebar-title">Документы для сравнения</div>', unsafe_allow_html=True)
     before_files = st.file_uploader("До изменений", type=["pdf", "docx", "xlsx", "xlsm"], accept_multiple_files=True)
     after_files = st.file_uploader("После изменений", type=["pdf", "docx", "xlsx", "xlsm"], accept_multiple_files=True)
+    after_complete = st.checkbox("Все необходимые документы «после» загружены", value=False,
+        help="Ваше подтверждение полноты комплекта, а не результат проверки программы. Если не уверены, оставьте выключенным. Учитывается при следующем анализе.")
     run = st.button("Сравнить документы", type="primary", width="stretch")
     demo = st.button("Запустить контрольный пример", width="stretch")
     with st.expander("Дополнительная ИИ-проверка"):
@@ -167,7 +192,7 @@ if run or demo:
                 else:
                     before_docs = [extract_document(file, file.name, "before") for file in before_files]
                     after_docs = [extract_document(file, file.name, "after") for file in after_files]
-                local_result = analyze_documents(before_docs, after_docs)
+                local_result = analyze_documents(before_docs, after_docs, after_complete=after_complete if not demo else False)
             # Save the completed local stage before the optional network stage.
             st.session_state["result"] = local_result
             st.session_state["mode"] = "demo" if demo else "uploaded"
@@ -272,6 +297,9 @@ with matrix_section:
         selected_id = st.selectbox("Выберите строку для просмотра цитат", list(lookup), format_func=lambda key: lookup[key].label[:150], key="matrix_row_selection")
         row = lookup[selected_id]
         st.subheader("Сравнить назначения")
+        if row.assessment:
+            with st.expander(f"Оценка сопоставления · {row.assessment.score:.0%}"):
+                render_confidence(row.assessment)
         if row.candidate_overlap:
             st.warning("Несколько владельцев — проверьте роли и границы ответственности.")
         if row.notes:
@@ -294,16 +322,30 @@ with summary_section:
     with review_filter:
         with st.popover("Фильтр", icon=":material/filter_list:", width="stretch"):
             kinds = st.multiselect("Тип проверки", ["loss", "duplicate", "conflict"], format_func=lambda key: FINDING_LABELS[key], placeholder="Все типы")
+            show_weak = st.checkbox("Показать слабые сигналы (менее 40%)", value=False)
+            with st.expander("Как читать шкалу уверенности"):
+                st.write("90–99% — очень высокая · 70–89% — высокая · 40–69% — требует проверки · 0–39% — слабый сигнал.")
+                st.write("Оценка учитывает сходство текста, действий, слов объекта, тип нормы, владельцев и ограничения извлечения. Перенос или разделение снижают уверенность в потере. Это эвристика, не вероятность нарушения.")
+                st.caption("Полноту комплекта заявляет пользователь. Отсутствие ошибок чтения не доказывает полноту. 100% и автоматический статус «подтверждено» не выдаются. Приоритет означает порядок проверки, не уровень ущерба.")
+                for kind, levels in confidence_counts(result.findings).items():
+                    st.write(f"{FINDING_LABELS[kind]}: " + " · ".join(f"{label} — {levels[key]}" for key, label in LEVELS.items()))
     if not result.findings:
         st.info("Индикаторы рисков не найдены. Проверьте охват и назначения: это не подтверждение отсутствия рисков.")
     findings = [finding for finding in result.findings if not kinds or finding.kind in kinds]
+    weak_count = sum(confidence_level(finding.confidence) == "weak" for finding in findings)
+    if weak_count and not show_weak:
+        st.caption(f"Скрыто слабых сигналов: {weak_count}. Они сохранены в общем счётчике и экспорте.")
+    if not show_weak:
+        findings = [finding for finding in findings if confidence_level(finding.confidence) != "weak"]
     if result.findings:
         st.caption(f"Вопросов: {len(findings)}. Откройте нужный, чтобы увидеть основание и следующий шаг.")
     review_page_count = max(1, (len(findings) + 4) // 5)
     review_page = st.selectbox("Страница вопросов", range(review_page_count), format_func=lambda value: f"{value + 1} / {review_page_count}") if review_page_count > 1 else 0
     for index, finding in enumerate(findings[review_page * 5:(review_page + 1) * 5], review_page * 5 + 1):
-        with st.expander(f"{index:02d} · {finding.title}", expanded=False):
+        score = finding.assessment.score if finding.assessment else min(.99, finding.confidence)
+        with st.expander(f"{index:02d} · {finding.title} · {score:.0%}", expanded=False):
             st.caption(FINDING_LABELS.get(finding.kind, finding.kind))
+            render_confidence(finding.assessment, finding=True)
             st.write(finding.explanation)
             st.markdown("**Следующий шаг**")
             st.write(finding.recommendation or "Сверить назначение и границы ответственности с владельцем процесса.")
