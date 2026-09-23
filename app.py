@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 from collections import Counter
 
 import pandas as pd
@@ -18,6 +19,19 @@ from qaitu.reporting import AI_COMPARISON_LABELS, AI_STATUS_LABELS, COVERAGE_LAB
 
 st.set_page_config(page_title="QAITU · карта ответственности", page_icon="◈", layout="wide")
 apply_theme()
+
+# The optional workspace is lazy-loaded; disabling it leaves the core dependency graph unchanged.
+if os.environ.get("METRICS_MODULE", "on").strip().lower() not in {"off", "0", "false", "no"}:
+    with st.sidebar:
+        workspace = st.radio("Рабочий раздел", ["Структура и функции", "Эффективность и оптимизация"], key="qaitu_workspace")
+    if workspace == "Эффективность и оптимизация":
+        from qaitu.metrics_ui import render_metrics_workspace
+
+        with st.sidebar:
+            sidebar_brand()
+            st.caption("Показатели отчётов, проверка прогнозов и обоснования рекомендаций.")
+        render_metrics_workspace(core_result=st.session_state.get("result"), core_is_synthetic=st.session_state.get("mode") == "demo")
+        st.stop()
 
 
 def render_source(source, *, context=False):
